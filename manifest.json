@@ -1,0 +1,73 @@
+{
+  "manifest_version": 3,
+  "name": "PRISM",
+  "version": "0.1.0",
+  "description": "PRISM — a full-fledged YouTube experience extension: discovery feeds, credibility layer, theme engine, session history, SponsorBlock, playback controls and more. Signed by Mozilla, distributed via GitHub releases, never listed on AMO.",
+  "homepage_url": "https://github.com/mheci/PRISM",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "prism@mheci.github.io",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://music.youtube.com/*",
+    "https://sponsor.ajay.app/*",
+    "https://returnyoutubedislikeapi.com/*",
+    "https://cdn.jsdelivr.net/*",
+    "https://huggingface.co/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*"
+      ],
+      "js": ["content/bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*"
+      ],
+      "js": ["content/boot.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "options_ui": {
+    "page": "options/index.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "PRISM",
+    "default_popup": "popup/index.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "96": "icons/icon96.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "96": "icons/icon96.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/prism-core.wasm"],
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*", "https://music.youtube.com/*"]
+    }
+  ]
+}

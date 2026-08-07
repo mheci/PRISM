@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PRISM — Dashboard</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <img src="../icons/icon48.png" alt="" width="36" height="36">
+        <div>
+          <div class="brand-name">PRISM</div>
+          <div class="brand-sub">v<span id="ver">—</span></div>
+        </div>
+      </div>
+      <div id="command-trigger" tabindex="0" role="button" aria-label="Command palette (Ctrl+K)">
+        <span>Search or run a command…</span><kbd>Ctrl K</kbd>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sidebar-foot">
+        <button id="profiles-btn">Profiles</button>
+        <button id="backup-btn">Backup</button>
+        <button id="restore-btn">Restore</button>
+      </div>
+    </aside>
+    <main id="content"></main>
+  </div>
+
+  <div id="palette" hidden>
+    <input id="palette-input" type="search" placeholder="Type a command…" autocomplete="off">
+    <div id="palette-results"></div>
+  </div>
+
+  <div id="modal" hidden></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,144 @@
+// PRISM Mozilla signing.
+//
+// Signs dist/prism.zip via the AMO API v5 (JWT HS256). Channel is ALWAYS
+// "unlisted" — the add-on is signed but never published to addons.mozilla.org.
+// GitHub Releases are the only distribution channel.
+//
+// Env: AMO_JWT_ISSUER, AMO_JWT_SECRET, AMO_GUID (default prism@mheci.github.io),
+//      AMO_TIMEOUT_MIN (default 25).
+// Output: dist/prism-signed.xpi
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+const GUID = process.env.AMO_GUID || "prism@mheci.github.io";
+const ISSUER = process.env.AMO_JWT_ISSUER;
+const SECRET = process.env.AMO_JWT_SECRET;
+const TIMEOUT_MS = (Number(process.env.AMO_TIMEOUT_MIN) || 25) * 60 * 1000;
+const API = "https://addons.mozilla.org/api/v5/addons";
+
+const zipPath = path.join(root, "dist", "prism.zip");
+const xpiPath = path.join(root, "dist", "prism-signed.xpi");
+
+if (!ISSUER || !SECRET) {
+  console.error("Missing AMO_JWT_ISSUER or AMO_JWT_SECRET env vars");
+  process.exit(1);
+}
+if (!fs.existsSync(zipPath)) {
+  console.error("dist/prism.zip not found — run npm run build first");
+  process.exit(1);
+}
+
+const b64url = (buf) => Buffer.from(buf).toString("base64url");
+const jwt = () => {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = b64url(JSON.stringify({ iss: ISSUER, iat: now, exp: now + 180 }));
+  const sig = crypto.createHmac("sha256", SECRET).update(`${header}.${payload}`).digest("base64url");
+  return `${header}.${payload}.${sig}`;
+};
+const auth = () => ({ Authorization: `JWT ${jwt()}` });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function stage() {
+  const form = new FormData();
+  form.append("upload", new Blob([fs.readFileSync(zipPath)]), "prism.zip");
+  form.append("channel", "unlisted");
+  const res = await fetch(`${API}/upload/`, { method: "POST", headers: auth(), body: form });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    console.error(`Staging failed (${res.status}):`, JSON.stringify(body).slice(0, 600));
+    process.exit(1);
+  }
+  console.log(`Staged upload ${body.uuid} (channel ${body.channel})`);
+  return body.uuid;
+}
+
+async function waitValidated(uuid) {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${API}/upload/${uuid}/`, { headers: auth() });
+    const u = await res.json().catch(() => ({}));
+    if (u.processed) {
+      if (!u.valid) {
+        console.error("Validation failed:");
+        for (const m of (u.validation && u.validation.messages) || []) {
+          console.error(`  [${m.id || m.type || "?"}] ${m.message}`);
+        }
+        process.exit(1);
+      }
+      console.log(`Upload validated (version ${u.version || "n/a"})`);
+      return;
+    }
+    await sleep(5000);
+  }
+  console.error("Timed out waiting for validation.");
+  process.exit(1);
+}
+
+async function submit(uuid) {
+  const createRes = await fetch(`${API}/addon/`, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, auth()),
+    body: JSON.stringify({ version: { upload: uuid } }),
+  });
+  if (createRes.ok) {
+    const created = await createRes.json().catch(() => ({}));
+    console.log(`Created add-on ${GUID}, submitted version ${created.version && created.version.version}`);
+    return created.version && created.version.id;
+  }
+  const vres = await fetch(`${API}/addon/${GUID}/versions/`, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, auth()),
+    body: JSON.stringify({ upload: uuid }),
+  });
+  const vbody = await vres.json().catch(() => ({}));
+  if (!vres.ok) {
+    console.error(`Version submission failed (${vres.status}):`, JSON.stringify(vbody).slice(0, 600));
+    process.exit(1);
+  }
+  console.log(`Submitted new version ${vbody.version} — id ${vbody.id}`);
+  return vbody.id;
+}
+
+async function pollSigned(versionId) {
+  const deadline = Date.now() + TIMEOUT_MS;
+  let last = "";
+  while (Date.now() < deadline) {
+    const res = await fetch(`${API}/addon/${GUID}/versions/${versionId}/`, { headers: auth() });
+    const v = await res.json().catch(() => ({}));
+    const status = v.status || "unknown";
+    if (status !== last) {
+      console.log(`  version status: ${status}`);
+      last = status;
+    }
+    if (v.file && v.file.id && v.file.status === "public") {
+      return v.file.url;
+    }
+    if (status === "disabled" || status === "rejected") {
+      console.error("Version rejected:", JSON.stringify(v).slice(0, 800));
+      process.exit(1);
+    }
+    await sleep(15000);
+  }
+  console.error("Timed out waiting for signing.");
+  process.exit(1);
+}
+
+async function download(url) {
+  const res = await fetch(url, { headers: auth() });
+  if (!res.ok) {
+    console.error(`Download failed (${res.status})`);
+    process.exit(1);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(xpiPath, buf);
+  console.log(`Saved dist/prism-signed.xpi (${(buf.length / 1024).toFixed(1)} KB)`);
+}
+
+const url = await pollSigned(await submit(await waitValidated(await stage())));
+await download(url);
+console.log("Signing complete — artifact never published to AMO.");

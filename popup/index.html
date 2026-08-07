@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PRISM</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="../icons/icon48.png" alt="" width="30" height="30">
+    <div>
+      <h1>PRISM</h1>
+      <p class="sub">v<span id="ver">—</span> · signed · unlisted</p>
+    </div>
+    <span id="health" class="pill" title="Runtime health">—</span>
+  </header>
+
+  <section>
+    <input id="search" type="search" placeholder="Quick search settings…" autocomplete="off">
+    <div id="results"></div>
+  </section>
+
+  <section>
+    <button id="open-yt" class="primary">Open YouTube</button>
+    <button id="open-options">Dashboard</button>
+    <button id="open-releases">Releases</button>
+  </section>
+
+  <section id="status">
+    <div class="row"><span>Engine</span><span id="st-engine">—</span></div>
+    <div class="row"><span>Modules</span><span id="st-modules">—</span></div>
+    <div class="row"><span>Quarantined</span><span id="st-quarantined">—</span></div>
+    <div class="row"><span>Video</span><span id="st-video">—</span></div>
+  </section>
+
+  <footer>Independent of Google/YouTube</footer>
+  <script src="popup.js"></script>
+</body>
+</html>

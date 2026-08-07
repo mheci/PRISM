@@ -1,0 +1,29 @@
+{
+  "name": "prism-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PRISM — a full-fledged Firefox WebExtension for YouTube. Rust core (WASM) + thin zero-dependency JS shell.",
+  "license": "Unlicense",
+  "scripts": {
+    "build:rust": "cargo build --release --target wasm32-unknown-unknown -p prism-wasm",
+    "build:wasm": "node scripts/optimize-wasm.mjs",
+    "build:ext": "node scripts/build.mjs",
+    "build": "npm run build:rust && npm run build:wasm && npm run build:ext",
+    "test:rust": "cargo test --workspace",
+    "test:wasm": "node scripts/smoke-wasm.mjs",
+    "test:engine": "node scripts/test-engine.mjs",
+    "test": "npm run test:rust && npm run test:wasm && npm run test:engine",
+    "check": "node scripts/check.mjs",
+    "lint": "cargo clippy --workspace --all-targets -- -D warnings",
+    "fmt": "cargo fmt --all",
+    "sign": "node scripts/sign.mjs"
+  },
+  "devDependencies": {
+    "binaryen": "^116.0.0",
+    "wasm-opt": "^1.4.0"
+  },
+  "allowScripts": {
+    "binaryen@116.0.0": true,
+    "wasm-opt@1.4.0": true
+  }
+}

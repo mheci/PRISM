@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm ci
+        run: npm ci
+      - name: Build (wasm + bundle + zip)
+        run: npm run build
+      - name: Pre-release checks
+        run: npm run check
+      - name: ABI smoke tests
+        run: npm run test:wasm
+      - name: Engine unit tests
+        run: npm run test:engine
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prism-build
+          path: |
+            dist/prism.zip
+            dist/prism.zip.sha256
+            dist/prism-core.wasm
+            dist/content/engine.js

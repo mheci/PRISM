@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Validate manifest + tag version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MANIFEST="$(node -p "require('./manifest.json').version")"
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "Tag $TAG does not match manifest version $MANIFEST" >&2
+            exit 1
+          fi
+
+      - name: Full test suite
+        run: npm test
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Pre-release checks
+        run: npm run check
+
+      - name: Sign with Mozilla (unlisted channel — never published to AMO)
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          AMO_GUID: prism@mheci.github.io
+          AMO_TIMEOUT_MIN: 20
+        run: node scripts/sign.mjs
+
+      - name: Verify signed artifact
+        run: |
+          test -f dist/prism-signed.xpi
+          node -e "const fs=require('fs');const b=fs.readFileSync('dist/prism-signed.xpi');if(b.slice(0,2).toString()!=='PK'){console.error('not a zip');process.exit(1)};console.log('signed xpi bytes:',b.length)"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="PRISM ${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "$title" --verify-tag
+            gh release upload "$GITHUB_REF_NAME" dist/prism-signed.xpi --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$title" \
+              --notes "PRISM ${GITHUB_REF_NAME#v} — signed by Mozilla, unlisted channel. Download prism-signed.xpi and install it via about:addons → Install Add-on From File…" \
+              --generate-notes \
+              dist/prism-signed.xpi
+          fi
