@@ -40,6 +40,25 @@ for (const size of [16, 32, 48, 96, 128]) {
 }
 ok("icons present");
 
+// 4b. zip integrity (strict central-directory walk)
+const zipPath = path.join(root, "dist", "prism.zip");
+if (!fs.existsSync(zipPath)) {
+  fail("dist/prism.zip missing — run npm run build");
+} else {
+  const zip = fs.readFileSync(zipPath);
+  const eocd = zip.slice(zip.length - 22);
+  if (eocd.readUInt32LE(0) !== 0x06054b50) fail("zip EOCD signature missing");
+  else {
+    const cdStart = eocd.readUInt32LE(16);
+    const cdSize = eocd.readUInt32LE(12);
+    const okZip =
+      zip.readUInt32LE(cdStart) === 0x02014b50 &&
+      cdStart + cdSize + 22 === zip.length;
+    if (!okZip) fail("zip central directory corrupt");
+    else ok("zip integrity (" + (zip.length / 1024).toFixed(1) + " KB)");
+  }
+}
+
 // 5. secret scan
 const secretPatterns = [/JWT_SECRET\s*[:=]\s*['"][A-Za-z0-9]{32,}/, /964b878d64856a6a123dfeea27847bc/i];
 const walk = (dir, base) => {

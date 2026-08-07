@@ -100,6 +100,7 @@ function packageZip() {
 
   // ── zip writer ──
   const chunks = [];
+  const centralChunks = [];
   const central = [];
   let offset = 0;
   for (const e of entries) {
@@ -129,9 +130,9 @@ function packageZip() {
     rec.writeUInt32LE(e.size, 24);
     rec.writeUInt16LE(e.name.length, 28);
     rec.writeUInt32LE(e.offset, 42);
-    chunks.push(rec, e.name);
+    centralChunks.push(rec, e.name);
   }
-  const cd = Buffer.concat(chunks);
+  const cd = Buffer.concat(centralChunks);
   chunks.push(cd);
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054b50, 0);
