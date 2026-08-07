@@ -39,11 +39,11 @@ jobs:
             exit 1
           fi
 
-      - name: Full test suite
-        run: npm test
-
       - name: Build extension
         run: npm run build
+
+      - name: Full test suite
+        run: npm test
 
       - name: Pre-release checks
         run: npm run check
