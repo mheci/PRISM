@@ -491,7 +491,7 @@
             '<div class="module-row"><span class="name">' + m.id + '</span><span class="badge ' + (m.quarantined ? "err" : m.state === "started" ? "ok" : "warn") + '">' + (m.quarantined ? "quarantined" : m.state) + "</span></div>"
           ).join("");
           body.innerHTML =
-            '<div class="stat" style="margin-bottom:10px"><div class="v">' + Math.round((h.uptimeMs || 0) / 1000) + "s</div><div class=\"l\">uptime</div></div>"' +
+            '<div class="stat" style="margin-bottom:10px"><div class="v">' + Math.round((h.uptimeMs || 0) / 1000) + 's</div><div class="l">uptime</div></div>' +
             '<div class="module-row"><span class="name">Modules</span><span>' + modules.length + "</span></div>" +
             rows;
         } else if (res && res.core) {
