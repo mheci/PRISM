@@ -93,7 +93,7 @@ async function submit(uuid) {
   const vres = await fetch(`${API}/addon/${GUID}/versions/`, {
     method: "POST",
     headers: Object.assign({ "Content-Type": "application/json" }, auth()),
-    body: JSON.stringify({ version: { upload: uuid } }),
+    body: JSON.stringify({ upload: uuid }),
   });
   const vbody = await vres.json().catch(() => ({}));
   if (!vres.ok) {
