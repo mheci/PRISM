@@ -120,7 +120,6 @@ impl WatchRecord {
             0.0
         }
     }
-
     fn push_session(&mut self, now: u64, watched_sec: f64, kind: &str, max_sessions: usize) {
         self.sessions.push(Session {
             started_at: now,
@@ -155,7 +154,7 @@ impl WatchRecord {
 
     /// Accumulates a single session delta (host calls every tick).
     pub fn add_watch_time(&mut self, delta_sec: f64) {
-        self.total_watch_sec += delta_sec.max(0.0).min(10.0); // clamp runaway deltas
+        self.total_watch_sec += delta_sec.clamp(0.0, 10.0); // clamp runaway deltas
         self.watch_count = self.watch_count.saturating_add(1);
     }
 }
@@ -249,7 +248,7 @@ pub fn aggregate(records: &[WatchRecord], now: u64) -> Aggregate {
             videos,
         })
         .collect();
-    days.sort_by(|a, b| b.day.cmp(&a.day));
+    days.sort_by_key(|d| std::cmp::Reverse(d.day));
     let mut channels: Vec<ChannelRow> = by_channel
         .into_iter()
         .map(|(channel, (watch_sec, videos))| ChannelRow {
@@ -313,7 +312,7 @@ pub fn evict_to_capacity(records: &mut Vec<WatchRecord>, capacity: usize) -> usi
     if records.len() <= capacity {
         return 0;
     }
-    records.sort_by(|a, b| b.last_watched.cmp(&a.last_watched));
+    records.sort_by_key(|r| std::cmp::Reverse(r.last_watched));
     let removed = records.len() - capacity;
     records.truncate(capacity);
     removed

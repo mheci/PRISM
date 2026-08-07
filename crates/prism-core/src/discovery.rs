@@ -151,7 +151,7 @@ pub fn parse_ago_ms(text: &str, now_ms: u64) -> u64 {
         u if u.starts_with("month") => 30.0 * 86_400.0,
         u if u.starts_with("week") => 7.0 * 86_400.0,
         u if u.starts_with("day") => 86_400.0,
-        u if u.starts_with("hour") => 3_600.0,
+        u if u.starts_with("hour") => 3600.0,
         u if u.starts_with("minute") => 60.0,
         _ => 0.0,
     };
@@ -284,7 +284,7 @@ mod tests {
             video_id: "a".into(),
             title: "a".into(),
             channel: "c".into(),
-            published_at_ms: now - 2 * 3600_000,
+            published_at_ms: now - 2 * 3_600_000,
             view_count: 10_000,
             duration_sec: 100.0,
         };
@@ -292,7 +292,7 @@ mod tests {
             video_id: "b".into(),
             title: "b".into(),
             channel: "c".into(),
-            published_at_ms: now - 3600_000,
+            published_at_ms: now - 3_600_000,
             view_count: 10_000,
             duration_sec: 100.0,
         };

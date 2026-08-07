@@ -3,6 +3,7 @@
 //! A deliberately tiny, hand-rolled C ABI so the host never depends on
 //! wasm-bindgen glue or its CLI toolchain. The host calls:
 //!
+#![allow(missing_docs)]
 //! ```text
 //!   ptr, len = prism_handle(request_ptr, request_len)
 //!   // read `len` bytes at `ptr`, then:

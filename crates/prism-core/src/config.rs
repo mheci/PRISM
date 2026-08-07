@@ -8,7 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, ErrorCode, Recovery, Severity, Subsystem};
+use crate::error::{Error, ErrorCode, Subsystem};
+
+#[cfg(test)]
+use crate::error::{Recovery, Severity};
 
 /// A single validation issue discovered while loading a settings blob.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
