@@ -95,12 +95,13 @@ impl WatchRecord {
         newly_complete
     }
 
-    /// The completion rule: past 97% or under 15s remaining.
+    /// The completion rule: past 97% or under 15s remaining — but never for
+    /// short content watched only briefly (a 10s video at 2s is not "done").
     pub fn is_complete(&self) -> bool {
         if self.progress_pct >= COMPLETE_PROGRESS_PCT {
             return true;
         }
-        if self.duration_sec > 0.0 {
+        if self.duration_sec >= COMPLETE_REMAINING_SEC {
             let remaining = self.duration_sec - self.last_position_sec;
             if remaining.is_finite() && remaining < COMPLETE_REMAINING_SEC {
                 return true;

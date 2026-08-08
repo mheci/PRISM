@@ -68,30 +68,40 @@ impl QualityClass {
 /// Classifies a stream by its itag.
 ///
 /// Video itags: 160/133/134/135/136/137/138/264/266/298/299/303/304/305/
-/// 308/278/242/243/244/247/248/271/313/315/272.
+/// 308/278/242/243/244/247/248/271/313/315/272 (+ 300/301/302/334 60fps).
 /// Audio itags: 139/140/141/171/249/250/251.
 /// Muxed: 18/22/37/59/43.
 pub fn classify_itag(itag: u64) -> QualityClass {
     match itag {
-        272 | 315 => QualityClass::Uhd,             // 4320p60 / 2160p60
-        138 | 266 | 305 | 313 => QualityClass::Uhd, // 2160p family
-        264 | 304 | 308 => QualityClass::Qhd,       // 1440p family
-        137 | 299 | 303 => QualityClass::Fhd,       // 1080p family
-        22 | 37 => QualityClass::Fhd,               // 720p/1080p muxed
-        136 | 247 | 248 | 298 => QualityClass::Hd,  // 720p family
-        135 | 59 | 244 => QualityClass::Sd,         // 480p family
-        18 | 43 | 134 | 243 => QualityClass::Ed,    // 360p family
-        133 | 160 | 242 | 278 => QualityClass::Ld,  // 240p/144p
+        272 | 315 => QualityClass::Uhd,                   // 4320p60 / 2160p60
+        138 | 266 | 271 | 305 | 313 => QualityClass::Uhd, // 2160p family
+        264 | 300 | 304 | 308 => QualityClass::Qhd,       // 1440p family
+        137 | 299 | 303 => QualityClass::Fhd,             // 1080p family
+        37 => QualityClass::Fhd,                          // 1080p muxed
+        136 | 247 | 248 | 298 | 302 | 334 => QualityClass::Hd, // 720p family
+        22 => QualityClass::Hd,                           // 720p muxed
+        135 | 59 | 244 | 301 => QualityClass::Sd,         // 480p family
+        18 | 43 | 134 | 243 => QualityClass::Ed,          // 360p family
+        133 | 160 | 242 | 278 => QualityClass::Ld,        // 240p/144p
         139 | 140 | 141 | 171 | 249 | 250 | 251 => QualityClass::Audio,
         _ => QualityClass::Other,
     }
 }
 
-/// Classifies by a human label ("1080p", "720p60", "AAC-128k").
+/// Classifies by a human label ("1080p", "720p60", "AAC-128k", "4K").
 pub fn classify_label(label: &str) -> QualityClass {
     let lower = label.to_ascii_lowercase();
     if lower.contains("aac") || lower.contains("opus") || lower.contains("vorbis") {
         return QualityClass::Audio;
+    }
+    if lower.contains("4k") || lower.contains("2160") {
+        return QualityClass::Uhd;
+    }
+    if lower.contains("8k") || lower.contains("4320") {
+        return QualityClass::Uhd;
+    }
+    if lower.contains("2k") || lower.contains("1440") {
+        return QualityClass::Qhd;
     }
     let n = lower
         .split(|c: char| !c.is_ascii_digit())
@@ -254,7 +264,9 @@ pub fn aggregate_buckets(buckets: &[Bucket], range: Range) -> Bucket {
         Some(hours) => {
             let now_hour = now_hour();
             for b in buckets {
-                if now_hour.saturating_sub(b.hour) < hours {
+                // Exclude future-dated buckets (clock skew would otherwise
+                // fold them into every range).
+                if b.hour <= now_hour && now_hour.saturating_sub(b.hour) < hours {
                     out.merge(b);
                 }
             }

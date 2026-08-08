@@ -49,7 +49,7 @@
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (tab && tab.url && /^https:\/\/(www\.|m\.|music\.)?youtube\.com/.test(tab.url)) {
         const res = await browser.tabs.sendMessage(tab.id, { type: "prism:ping" }).catch(() => null);
-        if (res && res.health) renderHealth(res.health);
+        if (res && res.engine) renderHealth(res.engine);
         else $("st-engine").textContent = "tab open, engine idle";
       } else {
         $("st-engine").textContent = "open a YouTube tab";

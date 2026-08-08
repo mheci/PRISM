@@ -43,6 +43,8 @@ pub struct Diagnostics {
     log: VecDeque<LogLine>,
     log_capacity: usize,
     metrics: std::collections::BTreeMap<String, FeatureMetrics>,
+    /// LRU order of feature ids (front = least recently touched).
+    metric_order: VecDeque<String>,
     started_at_ms: u64,
     /// Quarantined module ids.
     quarantined: Vec<String>,
@@ -72,6 +74,7 @@ impl Diagnostics {
             log: VecDeque::with_capacity(log_capacity),
             log_capacity: log_capacity.max(16),
             metrics: Default::default(),
+            metric_order: VecDeque::new(),
             started_at_ms,
             quarantined: Vec::new(),
         }
@@ -104,20 +107,25 @@ impl Diagnostics {
 
     /// Records a metric tick for a feature.
     pub fn record_metric(&mut self, feature: &str, cpu_ms: f64) {
+        // Refresh recency first (drop then re-append).
+        if let Some(pos) = self.metric_order.iter().position(|f| f == feature) {
+            self.metric_order.remove(pos);
+        }
+        self.metric_order.push_back(feature.to_string());
+        if self.metrics.len() > METRIC_CAPACITY {
+            // Evict the least-recently-touched entry (front of the queue).
+            if let Some(oldest) = self.metric_order.pop_front() {
+                self.metrics.remove(&oldest);
+            }
+        }
         let m = self.metrics.entry(feature.to_string()).or_default();
         m.total_ms += cpu_ms;
         m.applies = m.applies.saturating_add(1);
-        if self.metrics.len() > METRIC_CAPACITY {
-            // Evict least-recently touched entries (BTreeMap order = name
-            // order; evict first inserted). Simple policy: drop the first.
-            if let Some(first) = self.metrics.keys().next().cloned() {
-                self.metrics.remove(&first);
-            }
-        }
     }
 
     /// Records an error for a feature.
     pub fn record_error(&mut self, feature: &str, error: &crate::error::Error) {
+        self.touch_metric(feature);
         let m = self.metrics.entry(feature.to_string()).or_default();
         m.errors = m.errors.saturating_add(1);
         m.last_error = Some(error.to_envelope().to_string());
@@ -125,12 +133,25 @@ impl Diagnostics {
 
     /// Marks a feature as quarantined (persistent failure).
     pub fn quarantine(&mut self, feature: &str) {
+        self.touch_metric(feature);
         self.metrics
             .entry(feature.to_string())
             .or_default()
             .quarantined = true;
         if !self.quarantined.iter().any(|q| q == feature) {
             self.quarantined.push(feature.to_string());
+        }
+    }
+
+    fn touch_metric(&mut self, feature: &str) {
+        if let Some(pos) = self.metric_order.iter().position(|f| f == feature) {
+            self.metric_order.remove(pos);
+        }
+        self.metric_order.push_back(feature.to_string());
+        if self.metrics.len() > METRIC_CAPACITY {
+            if let Some(oldest) = self.metric_order.pop_front() {
+                self.metrics.remove(&oldest);
+            }
         }
     }
 

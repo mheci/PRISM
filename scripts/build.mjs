@@ -86,7 +86,7 @@ function packageZip() {
   const skip = new Set([
     "dist", "target", "node_modules", ".git", "scripts", "crates", "docs",
     ".github", "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json",
-    ".gitignore", "README.md", "LICENSE",
+    ".gitignore", "README.md", "LICENSE", "manifest.json", // added explicitly
     "content/runtime.js", "content/boot.js", "content/modules",
   ]);
   const walk = (dir, base) => {

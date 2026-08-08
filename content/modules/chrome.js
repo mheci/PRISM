@@ -256,8 +256,9 @@
       // ── player dashboard button ──
       if (c.player_dash_button) {
         addPlayerButton("prism-dash-btn", "Open PRISM", '<svg viewBox="0 0 24 24" fill="currentColor" style="width:22px;height:22px"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>', () => {
-          try { window.__PRISM__ && window.__PRISM__.log("info", "chrome", "dashboard requested"); } catch (_) {}
-          window.open(browser.runtime ? browser.runtime.getURL("options/index.html") : "about:blank", "_blank");
+          // MAIN world has no browser API; ask the isolated bridge to open
+          // the options page.
+          try { P.call("open.options", {}).catch(() => {}); } catch (_) {}
         }, ctx);
       }
 
@@ -482,6 +483,10 @@
     stop() {
       this._stopFns.forEach((f) => f());
       this._stopFns = [];
+      if (this._chapterTimer) { try { this._chapterTimer(); } catch (_) {} this._chapterTimer = null; }
+      if (this._chapterTick) { try { this._chapterTick(); } catch (_) {} this._chapterTick = null; }
+      const panel = document.getElementById("prism-chapter-panel");
+      if (panel) panel.remove();
       removeButtons("prism-dash-btn");
       removeButtons("prism-copy-ts");
       removeButtons("prism-copy-info");

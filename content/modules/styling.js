@@ -72,7 +72,10 @@
 
   // Floating widgets: cinema spotlight, ambient canvas, top bar, badges.
   let widgets = [];
+  let widgetStops = [];
   function rebuildWidgets(ctx) {
+    widgetStops.forEach((s) => { try { s(); } catch (_) {} });
+    widgetStops = [];
     widgets.forEach((w) => w.remove());
     widgets = [];
     const s = ctx.settings();
@@ -87,6 +90,7 @@
       widgets.push(el);
       return el;
     };
+    const tick = (fn, ms) => { widgetStops.push(ctx.timer.interval(fn, ms)); };
 
     if (s.player.cinema_opacity > 0) {
       const spot = mk("prism-cinema", "position:fixed;z-index:1300;pointer-events:none;display:none");
@@ -99,7 +103,7 @@
         spot.style.cssText = `position:fixed;z-index:1300;pointer-events:none;display:block;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;box-shadow:0 0 0 9999px rgba(0,0,0,${op})`;
       };
       upd();
-      ctx.timer.interval(upd, 250);
+      tick(upd, 250);
     }
 
     if (s.player.top_progress_bar) {
@@ -119,7 +123,7 @@
         ctx.on(v, "timeupdate", upd, { passive: true });
         ctx.on(v, "seeked", upd, { passive: true });
       }
-      ctx.timer.interval(upd, 250);
+      tick(upd, 250);
     }
 
     if (s.player.remaining_badge) {
@@ -134,7 +138,7 @@
           b.textContent = "\u2212" + fmtTime(rem);
         }
       };
-      ctx.timer.interval(upd, 500);
+      tick(upd, 500);
     }
 
     if (s.player.clock_badge) {
@@ -147,7 +151,7 @@
           b.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         }
       };
-      ctx.timer.interval(upd, 15000);
+      tick(upd, 15000);
     }
 
     if (s.player.end_soon_warn) {
@@ -161,7 +165,7 @@
         if (warn) b.textContent = "Ending in " + fmtTime(rem);
         if (warn !== shown) { b.style.display = warn ? "block" : "none"; shown = warn; }
       };
-      ctx.timer.interval(upd, 500);
+      tick(upd, 500);
     }
 
     if (s.player.ambient_opacity > 0) {
@@ -171,7 +175,7 @@
       canvas.height = 27;
       const g = canvas.getContext("2d");
       let last = 0;
-      ctx.timer.interval(() => {
+      tick(() => {
         const v = document.querySelector("video.html5-main-video, #movie_player video");
         if (!v || v.paused || v.readyState < 2) return;
         const now = performance.now();
@@ -242,13 +246,16 @@
     stop() {
       const el = document.getElementById(STYLE_ID);
       if (el) el.remove();
-      this._ctx && this._ctx.settings;
       if (this._idleStop) { this._idleStop(); this._idleStop = null; }
       if (this._stopNav) this._stopNav();
-      if (window.__prismWidgets) window.__prismWidgets.forEach((w) => w.remove());
+      widgetStops.forEach((s) => { try { s(); } catch (_) {} });
+      widgetStops = [];
+      widgets.forEach((w) => w.remove());
+      widgets = [];
     },
     health() {
       return { styleInjected: !!document.getElementById(STYLE_ID) };
     },
   });
 })();
+

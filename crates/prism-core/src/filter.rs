@@ -134,6 +134,7 @@ impl FilterSet {
         }
         out.css.sort_by(|a, b| a.selector.cmp(&b.selector));
         out.procedural.sort_by(|a, b| a.selector.cmp(&b.selector));
+        out.paths.sort_by(|a, b| a.pattern.cmp(&b.pattern));
         out.paths.dedup();
         Ok(out)
     }
@@ -149,8 +150,17 @@ impl FilterSet {
         };
         let domain_list = parse_domains(domains);
 
-        // Procedural matchers must be evaluated by the host.
+        // Procedural matchers must be evaluated by the host. The base part
+        // still goes through the safety gate; the pattern is regex content.
         if let Some((base, pattern)) = split_procedural(selector, ":has-text(") {
+            if !is_safe_selector(base) {
+                return Err(Error::invalid(
+                    Subsystem::Filter,
+                    "parse_line",
+                    ErrorCode::FilterSyntax,
+                    format!("unsupported selector syntax: {base}"),
+                ));
+            }
             return Ok(Some(LineRule::Proc(ProcRule {
                 domains: domain_list,
                 selector: format!("{base}:has-text({pattern})"),
@@ -158,6 +168,14 @@ impl FilterSet {
             })));
         }
         if let Some((base, pattern)) = split_procedural(selector, ":matches-path(") {
+            if !is_safe_selector(base) {
+                return Err(Error::invalid(
+                    Subsystem::Filter,
+                    "parse_line",
+                    ErrorCode::FilterSyntax,
+                    format!("unsupported selector syntax: {base}"),
+                ));
+            }
             return Ok(Some(LineRule::Proc(ProcRule {
                 domains: domain_list,
                 selector: format!("{base}:matches-path({pattern})"),
@@ -173,6 +191,14 @@ impl FilterSet {
                 "parse_line",
                 ErrorCode::FilterSyntax,
                 format!("unsupported selector syntax: {selector}"),
+            ));
+        }
+        if selector.trim().is_empty() {
+            return Err(Error::invalid(
+                Subsystem::Filter,
+                "parse_line",
+                ErrorCode::FilterSyntax,
+                "empty selector",
             ));
         }
         Ok(Some(LineRule::Css(CssRule {
@@ -211,22 +237,30 @@ enum LineRule {
 }
 
 /// Splits `sel` at the first occurrence of `needle`, returning the part
-/// before it and the balanced content inside the trailing parens.
+/// before it and the balanced content inside the trailing parens. Escaped
+/// parens (`\(`, `\)`) inside the pattern do not affect balance, so regexes
+/// like `:has-text(/\(\d+\)/)` parse correctly.
 fn split_procedural<'a>(sel: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
     let at = sel.find(needle)?;
     let base = &sel[..at];
     let rest = &sel[at + needle.len()..];
     let mut depth = 0usize;
+    let mut escaped = false;
     let mut end = None;
     for (i, ch) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         match ch {
+            '\\' => escaped = true,
             '(' => depth += 1,
             ')' => {
-                depth = depth.saturating_sub(1);
                 if depth == 0 {
                     end = Some(i);
                     break;
                 }
+                depth -= 1;
             }
             _ => {}
         }
@@ -336,6 +370,36 @@ mod tests {
             &set.procedural[0].matcher,
             Matcher::MatchesPath(_)
         ));
+    }
+
+    #[test]
+    fn parses_regex_with_escaped_parens() {
+        let set = FilterSet::parse("##div:has-text(/\\(\\d+\\)/)").unwrap();
+        assert_eq!(set.procedural.len(), 1);
+        assert_eq!(set.css.len(), 0);
+        assert!(matches!(&set.procedural[0].matcher, Matcher::HasText(p) if p == r"/\(\d+\)/"));
+    }
+
+    #[test]
+    fn procedural_base_is_safety_gated() {
+        let set = FilterSet::parse("##ytd-app}body{display:none}:has-text(/x/)").unwrap();
+        assert_eq!(set.procedural.len(), 0);
+        assert!(!set.skipped.is_empty());
+    }
+
+    #[test]
+    fn empty_selector_is_skipped() {
+        let set = FilterSet::parse("##\nyoutube.com##\n").unwrap();
+        assert_eq!(set.css.len(), 0);
+        assert_eq!(set.skipped.len(), 2);
+    }
+
+    #[test]
+    fn path_dedup_handles_out_of_order_duplicates() {
+        let set =
+            FilterSet::parse("prism-block-path: /a/\nprism-block-path: /b/\nprism-block-path: /a/")
+                .unwrap();
+        assert_eq!(set.paths.len(), 2);
     }
 
     #[test]

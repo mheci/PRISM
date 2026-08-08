@@ -64,39 +64,55 @@
         }).filter((x) => x.action !== "off");
       };
 
-      // Decision loop.
+      // Decision loop (gated so overlapping ticks never double-fire).
+      let inFlight = false;
       ctx.timer.interval(async () => {
         const v = videoEl();
         if (!v || !this._set) return;
-        if (v.paused) return;
-        const decision = await ctx.core("sponsor.decision", {
-          video_id: this._set.video_id,
-          segments: this._set.segments,
-          position: v.currentTime,
-          last_seek: this._lastSeek,
-          draft: false,
-          actions: actions(),
-        }).catch(() => null);
-        if (!decision) return;
-        if (decision.decision.kind === "skip") {
-          v.currentTime = decision.decision.to;
-          if (s.toasts) this._toast("Skipped sponsor segment", "info");
-          if (this._set) this._set.saved_seconds = (this._set.saved_seconds || 0) + 1;
-        } else if (decision.decision.kind === "mute") {
-          v.muted = true;
-          ctx.timer.timeout(() => { if (videoEl()) videoEl().muted = false; }, Math.max(0, decision.decision.until - v.currentTime) * 1000);
+        if (v.paused || inFlight) return;
+        inFlight = true;
+        try {
+          const decision = await ctx.core("sponsor.decision", {
+            video_id: this._set.video_id,
+            segments: this._set.segments,
+            position: v.currentTime,
+            last_seek: this._lastSeek,
+            draft: false,
+            actions: actions(),
+          }).catch(() => null);
+          if (!decision) return;
+          if (decision.decision.kind === "skip") {
+            v.currentTime = decision.decision.to;
+            if (s.toasts) this._toast("Skipped sponsor segment", "info");
+            if (this._set) this._set.saved_seconds = (this._set.saved_seconds || 0) + 1;
+          } else if (decision.decision.kind === "mute") {
+            v.muted = true;
+            ctx.timer.timeout(() => { if (videoEl()) videoEl().muted = false; }, Math.max(0, decision.decision.until - v.currentTime) * 1000);
+          }
+        } finally {
+          inFlight = false;
         }
       }, 500);
 
-      // Track user seeks to feed the grace window.
-      ctx.on(videoEl() || document, "seeking", () => {
-        this._lastSeek = performance.now() / 1000;
-      }, { passive: true });
+      // Track user seeks to feed the grace window — re-attached to the
+      // current video element on every navigation (no accumulation).
+      const wireSeeking = () => {
+        const v = videoEl();
+        if (!v || v === this._seekWired) return;
+        if (this._seekWired) {
+          try { this._seekWired.removeEventListener("seeking", this._seekHandler); } catch (_) {}
+        }
+        this._seekWired = v;
+        this._seekHandler = () => { this._lastSeek = performance.now() / 1000; };
+        v.addEventListener("seeking", this._seekHandler, { passive: true });
+      };
+      wireSeeking();
 
       ctx.on(document, "yt-navigate-finish", () => {
         this._set = null;
         this._lastSeek = null;
-        ctx.timer.timeout(load, 1000);
+        this._seekWired = null;
+        ctx.timer.timeout(() => { wireSeeking(); load(); }, 1000);
       }, { passive: true });
 
       load();
@@ -151,6 +167,10 @@
     stop() {
       if (this._marks) { this._marks.remove(); this._marks = null; }
       if (this._hud) { this._hud.remove(); this._hud = null; }
+      if (this._seekWired) {
+        try { this._seekWired.removeEventListener("seeking", this._seekHandler); } catch (_) {}
+        this._seekWired = null;
+      }
     },
     health() {
       return { segments: this._set ? this._set.segments.length : 0 };

@@ -54,9 +54,15 @@
         if (!vid || !v) return;
         if (this._session && this._session.videoId !== vid) this._session = null;
         if (!this._session) this._session = { videoId: vid, lastPos: v.currentTime, lastTick: Date.now() };
+        // Paused: nothing to record; just track position so the next play
+        // doesn't look like a seek.
+        if (v.paused || v.ended) {
+          this._session.lastPos = v.currentTime;
+          return;
+        }
         const delta = v.currentTime - this._session.lastPos;
         this._session.lastPos = v.currentTime;
-        if (delta < 0) return; // seek backwards; ignore
+        if (delta <= 0) return; // seek backwards or no progress; ignore
         const records = await loadHistory();
         let rec = records.find((r) => r.video_id === vid);
         if (!rec) {
@@ -66,7 +72,7 @@
         rec.duration_sec = v.duration || rec.duration_sec;
         rec.last_position_sec = v.currentTime;
         if (rec.duration_sec > 0) rec.progress_pct = Math.min(100, (v.currentTime / rec.duration_sec) * 100);
-        rec.total_watch_sec = (rec.total_watch_sec || 0) + Math.min(10, Math.max(0, delta));
+        rec.total_watch_sec = (rec.total_watch_sec || 0) + delta;
         rec.watch_count = (rec.watch_count || 0) + 1;
         rec.last_watched = Date.now();
         // Completion rule via Rust core.
@@ -94,16 +100,19 @@
         ctx.timer.timeout(() => this._maybeResume(ctx), 1200);
       }, { passive: true });
 
-      // Click recorder.
+      // Click recorder (serialized RMW so rapid clicks never lose entries).
       if (s.track_clicks) {
+        let clickChain = Promise.resolve();
         ctx.on(document, "click", (e) => {
           const rec = { t: Date.now(), kind: "click", tag: (e.target && e.target.tagName) || "", url: location.pathname };
-          P.storage.get("clicks").then((raw) => {
+          clickChain = clickChain.then(async () => {
+            const raw = await P.storage.get("clicks").catch(() => null);
             const arr = (raw && raw.v) || [];
             arr.push(rec);
             if (arr.length > 5000) arr.splice(0, arr.length - 5000);
-            return P.storage.set("clicks", { v: arr });
-          }).catch(() => {});
+            await P.storage.set("clicks", { v: arr }).catch(() => {});
+          });
+          clickChain.catch(() => {});
         }, { capture: true });
       }
     },

@@ -308,9 +308,12 @@ fn cmp_f64(a: f64, b: f64) -> std::cmp::Ordering {
 }
 
 /// Builds a cache key for a video's segments.
+///
+/// NOTE: this is a local-cache key only. In privacy mode the video ID is
+/// still embedded (the key never leaves the client); the privacy guarantee
+/// is about *outbound requests*, which the host must construct without the
+/// raw ID. Do not ship this key to any server.
 pub fn cache_key(video_id: &str, privacy: bool, hash_salt: u64) -> String {
-    // In privacy mode we still need local caching; the key is a salted hash
-    // so the raw ID never touches the API.
     let mut key = String::with_capacity(video_id.len() + 16);
     key.push_str(video_id);
     key.push(':');
@@ -352,7 +355,9 @@ pub fn parse_segments(video_id: &str, raw: &serde_json::Value) -> crate::Result<
         let (Some(start), Some(end)) = (start, end) else {
             continue;
         };
-        if end <= start || start < 0.0 {
+        // Reject NaN/Infinity ranges outright (comparisons silently pass
+        // them, which would poison skip decisions).
+        if !start.is_finite() || !end.is_finite() || end <= start || start < 0.0 {
             continue;
         }
         set.segments.push(Segment {

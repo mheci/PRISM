@@ -39,6 +39,10 @@
         if (!res || !res.ok) return res;
         const ct = (res.headers && res.headers.get && res.headers.get("content-type")) || "";
         if (ct && ct.indexOf("json") === -1 && ct.indexOf("text") === -1) return res;
+        // Skip large bodies before buffering (content-length check first).
+        let contentLength = 0;
+        try { contentLength = Number(res.headers.get("content-length")) || 0; } catch (_) {}
+        if (contentLength > 6 * 1024 * 1024) return res;
         const clone = res.clone();
         const txt = await clone.text();
         if (!txt || txt[0] !== "{") return res;
@@ -75,7 +79,9 @@
         }
         return res;
       } catch (_) {
-        return realFetch(input, init);
+        // Never re-issue the network request on a scrub failure — return
+        // the already-fetched response untouched.
+        return res;
       }
     };
   }
@@ -94,32 +100,51 @@
   // length/live/premiere marks + numbering. Runs on idle, yields.
   const CARD_SELECTOR = "ytd-rich-item-renderer,ytd-video-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer";
 
+  // Channel blocklist compiled once per scan: Set of @handles + keyword list.
+  function compileBlocklist(raw) {
+    const handles = new Set();
+    const keywords = [];
+    for (const line of String(raw || "").split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith("!") || t.startsWith("#")) continue;
+      if (t.startsWith("@")) handles.add(t.slice(1).toLowerCase());
+      else keywords.push(t.toLowerCase());
+    }
+    return { handles, keywords };
+  }
+
   async function scanCards(ctx) {
     const f = ctx.settings().feed;
     const cards = Array.from(document.querySelectorAll(CARD_SELECTOR));
+    const blockedList = f.channel_blocklist ? compileBlocklist(f.channel_blocklist) : null;
     let blocked = 0;
     for (let i = 0; i < cards.length; i++) {
       const card = cards[i];
       if (card.dataset.prismScanned) continue;
       card.dataset.prismScanned = "1";
 
-      // Channel blocker: check hrefs for @handle
-      if (f.channel_blocklist) {
-        const handle = findBlockedHandle(card, f.channel_blocklist);
-        if (handle) {
-          card.style.display = "none";
-          card.dataset.prismBlocked = "1";
-          blocked++;
-          continue;
+      // Channel blocker: read the handle href once, compare against a Set.
+      if (blockedList && blockedList.handles.size) {
+        const a = card.querySelector('a[href^="/@"]');
+        const href = a && a.getAttribute("href");
+        if (href) {
+          const m = href.match(/^\/(@[^/]+)/i);
+          const handle = m && m[1].slice(1).toLowerCase();
+          if (handle && blockedList.handles.has(handle)) {
+            card.style.display = "none";
+            card.dataset.prismBlocked = "1";
+            blocked++;
+            continue;
+          }
         }
       }
 
       // Keyword filter
-      if (f.keywords) {
+      if (blockedList && blockedList.keywords.length) {
         const title = card.querySelector("#video-title");
         const text = (title && (title.title || title.textContent)) || card.textContent || "";
         const lower = text.toLowerCase();
-        if (f.keywords.split("\n").map((k) => k.trim().toLowerCase()).filter(Boolean).some((k) => lower.includes(k))) {
+        if (blockedList.keywords.some((k) => lower.includes(k))) {
           card.style.display = "none";
           continue;
         }
@@ -140,22 +165,18 @@
         const dur = parseDuration(meta);
         if (f.highlight_long && dur >= (f.long_min_sec || 1200)) card.classList.add("prism-long");
         if (f.highlight_short && dur > 0 && dur <= (f.short_max_sec || 60)) card.classList.add("prism-short");
-        if (f.hide_live && /\bLIVE\b|watching now|live now/i.test(meta)) card.style.display = "none";
+        // Live: rely on the badge element rather than title text (titles can
+        // contain the word "LIVE" without being live).
+        if (f.hide_live) {
+          const liveBadge = card.querySelector(".ytd-thumbnail-overlay-time-status-renderer[overlay-style='LIVE'], ytd-badge-supported-renderer[aria-label*='live' i], .badge-shape-wiz--thumbnail-badge[aria-label*='live' i]");
+          const isLive = liveBadge || /\bwatching now\b|live now/i.test(meta);
+          if (isLive) card.style.display = "none";
+        }
         if (f.hide_premieres && /premiere|premieres/i.test(meta)) card.style.display = "none";
       }
 
       if ((i + 1) % 40 === 0) await new Promise((r) => setTimeout(r, 0));
     }
-  }
-
-  function findBlockedHandle(card, blocklist) {
-    const lines = blocklist.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
-    for (const line of lines) {
-      const handle = line.trim().startsWith("@") ? line.trim().slice(1) : null;
-      if (!handle) continue;
-      if (card.querySelector('a[href^="/@' + handle.replace(/["\\]/g, "\\$&") + '" i]')) return handle;
-    }
-    return null;
   }
 
   function parseDuration(text) {
@@ -174,10 +195,12 @@
     const done = new Set(records.filter((r) => r.completed || (r.progress_pct || 0) > 90).map((r) => r.video_id));
     if (!done.size) return;
     document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+      if (card.dataset.prismWatched) return;
       const link = card.querySelector('a[href*="/watch?v="]');
       if (!link) return;
       const vid = new URL(link.href).searchParams.get("v");
       if (vid && done.has(vid)) {
+        card.dataset.prismWatched = "1";
         if (f.watched_mode === "dim") card.style.opacity = "0.35";
         else card.style.display = "none";
       }

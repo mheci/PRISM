@@ -75,7 +75,11 @@ objects; the core validates settings on load.
 
 - Permission minimization: `storage` only; no `webRequest`, no tabs beyond
   the popup's own queries.
-- Origin checks on both directions of the postMessage bridge (token-gated).
+- The postMessage bridge uses a per-document token adopted during the
+  `core.ready` handshake. Note: MAIN world and the page share a world, so a
+  page script can eavesdrop on the token — treat all MAIN-world data as
+  untrusted. Storage mutations from MAIN world are limited to the extension's
+  own keys; the dashboard is the privileged surface.
 - Filter selectors are character-whitelisted before CSS emission.
 - Secrets never enter the repo: `scripts/check.mjs` scans the tree; CI uses
   GitHub secrets for AMO credentials.

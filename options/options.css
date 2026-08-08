@@ -55,7 +55,8 @@ textarea { width: 100%; min-height: 90px; resize: vertical; }
 .palette-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .palette-item:hover, .palette-item.active { background: var(--accent-soft); color: #ff8aa5; }
 .palette-item .k { color: var(--muted); font-size: 11px; }
-#modal { position: fixed; inset: 0; background: rgba(10,12,18,.7); z-index: 900; display: flex; align-items: center; justify-content: center; }
+#modal { position: fixed; inset: 0; background: rgba(10,12,18,.7); z-index: 900; display: none; align-items: center; justify-content: center; }
+#modal:not([hidden]) { display: flex; }
 #modal .modal-box { background: var(--panel2); border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(460px, 90%); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .stat { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }

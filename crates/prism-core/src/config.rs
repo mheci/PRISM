@@ -825,8 +825,9 @@ impl Settings {
         }
     }
 
-    /// Overlays one typed group with a raw JSON patch, falling back to the
-    /// group default on any error (recorded as an [`Issue`]).
+    /// Overlays one typed group with a raw JSON patch. Merging happens
+    /// per-field so a single invalid value only resets that field (recorded
+    /// as an [`Issue`]) instead of wiping the whole group.
     fn patch_group<T>(
         slot: &mut T,
         group_name: &str,
@@ -835,14 +836,28 @@ impl Settings {
     ) where
         T: serde::de::DeserializeOwned + Clone + Default + serde::Serialize,
     {
-        let mut v = serde_json::to_value(slot.clone()).unwrap_or(serde_json::Value::Null);
-        Self::deep_merge(&mut v, patch);
-        match serde_json::from_value::<T>(v) {
-            Ok(t) => *slot = t,
-            Err(e) => issues.push(Issue {
+        let Some(patch_obj) = patch.as_object() else {
+            issues.push(Issue {
                 path: group_name.into(),
-                message: format!("invalid group, using defaults: {e}"),
-            }),
+                message: "group must be an object".into(),
+            });
+            return;
+        };
+        // Fields that are present in the patch are merged one at a time.
+        let mut merged = serde_json::to_value(slot.clone()).unwrap_or(serde_json::Value::Null);
+        for (key, value) in patch_obj {
+            let mut trial = merged.clone();
+            Self::deep_merge(&mut trial, &serde_json::json!({ key: value }));
+            match serde_json::from_value::<T>(trial) {
+                Ok(t) => {
+                    *slot = t;
+                    merged = serde_json::to_value(slot.clone()).unwrap_or(serde_json::Value::Null);
+                }
+                Err(_) => issues.push(Issue {
+                    path: format!("{group_name}.{key}"),
+                    message: "invalid value, using default".into(),
+                }),
+            }
         }
     }
 
@@ -1034,6 +1049,22 @@ mod tests {
             Settings::from_json(r#"{"captions": {"position": "not-a-position"}}"#).unwrap();
         assert!(!issues.is_empty(), "invalid enum must produce an issue");
         assert_eq!(s.captions.position, CaptionPos::Bottom);
+    }
+
+    #[test]
+    fn one_bad_field_does_not_wipe_group() {
+        let (s, issues) = Settings::from_json(
+            r#"{"captions": {"enabled": true, "font_size_px": 40, "position": "bogus"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.captions.position,
+            CaptionPos::Bottom,
+            "bad field falls back"
+        );
+        assert!(s.captions.enabled, "valid sibling field survives");
+        assert_eq!(s.captions.font_size_px, 40, "valid sibling field survives");
+        assert!(issues.iter().any(|i| i.path == "captions.position"));
     }
 
     #[test]

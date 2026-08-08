@@ -70,10 +70,10 @@
           }
           const res = await realFetch(input, init);
           if (isYT(url)) {
+            // Header-only accounting: never buffer the body for size.
             let down = 0;
             const cl = res.headers && res.headers.get && res.headers.get("content-length");
             if (cl) down = parseInt(cl, 10) || 0;
-            if (!down) { try { down = (await res.clone().text()).length; } catch (_) {} }
             account(down, up, (() => { try { return new URL(url).hostname; } catch (_) { return ""; } })());
           }
           return res;
@@ -95,7 +95,7 @@
             let down = 0;
             const cl = this.getResponseHeader && this.getResponseHeader("content-length");
             if (cl) down = parseInt(cl, 10) || 0;
-            if (!down && this.response) down = (typeof this.response === "string" ? this.response.length : (this.response.byteLength || this.response.size || 0));
+            // Header-only: don't touch this.response (avoids buffering).
             account(down, up, (() => { try { return new URL(url).hostname; } catch (_) { return ""; } })());
           });
           return realSend.apply(this, arguments);
@@ -119,6 +119,8 @@
         const monthStart = hourOf(new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime());
         let used = 0;
         for (const b of buckets) if (b.hour >= monthStart) used += (b.down || 0) + (b.up || 0);
+        // Include the live (unflushed) bucket so the check never undercounts.
+        if (this._bucket && this._bucket.hour >= monthStart) used += (this._bucket.down || 0) + (this._bucket.up || 0);
         const r = await ctx.core("network.budget", { used_bytes: used, budget_gb: ctx.settings().network.budget_gb }).catch(() => null);
         if (!r) return;
         const monthKey = new Date().toISOString().slice(0, 7);

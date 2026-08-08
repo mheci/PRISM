@@ -49,20 +49,25 @@
     const { prism_alloc, prism_free, prism_handle, memory } = instance.exports;
     const request = JSON.stringify({ version: PROTOCOL, op, payload });
     const bytes = new TextEncoder().encode(request);
-    const reqPtr = prism_alloc(bytes.length);
-    new Uint8Array(memory.buffer, reqPtr, bytes.length).set(bytes);
-    const lenPtr = prism_alloc(8);
-    new BigInt64Array(memory.buffer, lenPtr, 1)[0] = 0n;
+    let reqPtr = 0;
+    let lenPtr = 0;
     let outPtr = 0;
     let outLen = 0;
     try {
+      reqPtr = prism_alloc(bytes.length);
+      lenPtr = prism_alloc(4);
+      if (!reqPtr || !lenPtr) throw new Error("core alloc failed");
+      // The ABI stores a wasm32 usize (4 bytes); the high half must be zero.
+      new Uint8Array(memory.buffer, lenPtr, 4).fill(0);
+      new Uint8Array(memory.buffer, reqPtr, bytes.length).set(bytes);
       outPtr = prism_handle(reqPtr, bytes.length, lenPtr);
-      outLen = Number(new BigInt64Array(memory.buffer, lenPtr, 1)[0]);
+      if (!outPtr) throw new Error("core handle failed");
+      outLen = new Uint32Array(memory.buffer, lenPtr, 1)[0];
       const out = new Uint8Array(memory.buffer, outPtr, outLen);
       return JSON.parse(new TextDecoder().decode(out));
     } finally {
-      prism_free(reqPtr, bytes.length);
-      prism_free(lenPtr, 8);
+      if (reqPtr) prism_free(reqPtr, bytes.length);
+      if (lenPtr) prism_free(lenPtr, 4);
       if (outPtr) prism_free(outPtr, outLen);
     }
   }
@@ -110,6 +115,11 @@
           result = true;
           break;
         }
+        case "open.options": {
+          await browser.runtime.openOptionsPage();
+          result = true;
+          break;
+        }
         case "health": {
           // Called from the popup/options via runtime message.
           result = await getHealth();
@@ -119,7 +129,12 @@
           result = { ok: false, error: { code: "UnknownOperation", message: "unknown bridge op: " + msg.op } };
         }
       }
-      window.postMessage({ prism: PROTOCOL, id, token, ok: true, result }, "*");
+      // Core.error envelope is promoted so the runtime sees ok:false.
+      if (result && typeof result === "object" && result.ok === false) {
+        window.postMessage({ prism: PROTOCOL, id, token, ok: false, error: result.error }, "*");
+      } else {
+        window.postMessage({ prism: PROTOCOL, id, token, ok: true, result }, "*");
+      }
     } catch (err) {
       window.postMessage(
         { prism: PROTOCOL, id, token, ok: false, error: { code: "BridgeError", message: String(err && err.message || err) } },
@@ -147,8 +162,9 @@
   window.addEventListener("message", (event) => {
     const msg = event.data;
     if (!msg || msg.prism !== PROTOCOL || typeof msg.id !== "number" || typeof msg.op !== "string") return;
-    // Only accept requests from our own MAIN-world script.
-    if (msg.token !== token) return;
+    // Handshake: core.ready is accepted with any token; the response carries
+    // ours so the MAIN world can adopt it for all subsequent calls.
+    if (msg.op !== "core.ready" && msg.token !== token) return;
     handleRequest(msg).catch(() => {});
   });
 

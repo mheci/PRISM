@@ -6,7 +6,9 @@ shell is a thin, zero-dependency DOM adapter.
 
 - **Signed by Mozilla** (AMO API, `unlisted` channel) — never published to AMO.
 - **Distributed exclusively via GitHub Releases.**
-- **Everything on-device** — no accounts, no cloud, no telemetry.
+- **Everything on-device** — no accounts, no telemetry. Optional third-party
+  APIs (DeArrow, Return YouTube Dislike, on-device AI model downloads) are
+  used only when the corresponding feature is enabled.
 
 ## Architecture
 

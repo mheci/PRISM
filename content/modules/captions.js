@@ -177,7 +177,20 @@
         }
       };
       apply();
-      ctx.timer.interval(apply, 3000); // watchdog self-heal
+      // State-checked watchdog: only re-engage when captions regressed
+      // (e.g. after an ad) — never fight a user who turned them off.
+      ctx.timer.interval(() => {
+        const s = ctx.settings();
+        if (shouldSkip(s)) return;
+        const btn = document.querySelector(".ytp-subtitles-button");
+        if (!btn) return;
+        if (btn.getAttribute("aria-pressed") === "false") {
+          const vid = videoId();
+          if (s.captions.respect_manual_off && vid && manualOff.get(vid)) return;
+          const api = playerApi();
+          if (api) engage(api, s);
+        }
+      }, 3000);
       ctx.on(document, "yt-navigate-finish", () => {
         manualOff.clear();
         ctx.timer.timeout(apply, 600);
@@ -185,10 +198,12 @@
       }, { passive: true });
     },
     _wireButton(api, s) {
-      if (this._wired) return;
+      const player = playerApi() || document;
+      if (this._wired && this._wiredPlayer === player) return;
+      if (this._stopObs) { this._stopObs(); this._stopObs = null; }
       this._wired = true;
+      this._wiredPlayer = player;
       const btn = () => document.querySelector(".ytp-subtitles-button");
-      this._off = P.scheduler && undefined;
       const obs = new MutationObserver(() => {
         const b = btn();
         if (!b) return;
@@ -212,13 +227,16 @@
           if (vid) manualOff.delete(vid);
         }
       });
-      obs.observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-pressed"] });
+      // Observe the player subtree only (the button lives inside it) — a
+      // full-document observer burns cycles on live-chat churn.
+      obs.observe(player, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-pressed"] });
       this._stopObs = () => obs.disconnect();
     },
     stop() {
       removeCaptionCSS();
       if (this._stopObs) { this._stopObs(); this._stopObs = null; }
       this._wired = false;
+      this._wiredPlayer = null;
     },
     health() {
       return { cssInjected: !!document.getElementById(captionStyleId()) };

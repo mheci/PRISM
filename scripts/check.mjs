@@ -65,7 +65,7 @@ for (const size of [16, 32, 48, 96, 128]) {
 }
 ok("icons present");
 
-// 4b. zip integrity (strict central-directory walk)
+// 4b. zip integrity (strict central-directory walk) + unique entries
 const zipPath = path.join(root, "dist", "prism.zip");
 if (!fs.existsSync(zipPath)) {
   fail("dist/prism.zip missing — run npm run build");
@@ -82,6 +82,21 @@ if (!fs.existsSync(zipPath)) {
     if (!okZip) fail("zip central directory corrupt");
     else ok("zip integrity (" + (zip.length / 1024).toFixed(1) + " KB)");
   }
+  // Duplicate entry names are ambiguous and rejected by strict extractors.
+  const names = new Set();
+  let off = 0;
+  let dups = [];
+  while (off + 4 <= zip.length && zip.readUInt32LE(off) === 0x04034b50) {
+    const nameLen = zip.readUInt16LE(off + 26);
+    const extraLen = zip.readUInt16LE(off + 28);
+    const csize = zip.readUInt32LE(off + 18);
+    const name = zip.slice(off + 30, off + 30 + nameLen).toString("utf8");
+    if (names.has(name)) dups.push(name);
+    names.add(name);
+    off += 30 + nameLen + extraLen + csize;
+  }
+  if (dups.length) fail("duplicate zip entries: " + dups.join(", "));
+  else ok("zip entries unique (" + names.size + ")");
 }
 
 // 5. secret scan

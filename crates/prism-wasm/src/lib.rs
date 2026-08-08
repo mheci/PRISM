@@ -71,13 +71,30 @@ pub unsafe extern "C" fn prism_free(ptr: *mut u8, len: usize) {
 ///
 /// # Safety
 /// `req_ptr`/`req_len` must describe a valid buffer for the duration of the
-/// call. The returned pointer must be released with `prism_free`.
+/// call. `out_len` must be non-null, writable, and point to at least
+/// `size_of::<usize>()` bytes. The returned pointer must be released with
+/// `prism_free`. Requests larger than [`prism_core::MAX_PAYLOAD_BYTES`] are
+/// rejected with a structured `PayloadTooLarge` error.
 #[no_mangle]
 pub unsafe extern "C" fn prism_handle(
     req_ptr: *const u8,
     req_len: usize,
     out_len: *mut usize,
 ) -> *mut u8 {
+    // Guard the contract up front: a null length slot or oversized request
+    // must never trap or allocate unboundedly.
+    if out_len.is_null() {
+        return std::ptr::null_mut();
+    }
+    if req_len > prism_core::MAX_PAYLOAD_BYTES {
+        let response = err_response(Error::invalid(
+            Subsystem::Protocol,
+            "prism_handle",
+            ErrorCode::PayloadTooLarge,
+            "request exceeds payload cap",
+        ));
+        return respond(&response, out_len);
+    }
     let request = if req_ptr.is_null() || req_len == 0 {
         String::new()
     } else {
@@ -87,10 +104,17 @@ pub unsafe extern "C" fn prism_handle(
         String::from_utf8_lossy(slice).into_owned()
     };
     let response = dispatch(&request);
-    let bytes = response.into_bytes();
+    respond(&response, out_len)
+}
+
+/// Serializes `response` into a fresh allocation and stores its length in
+/// `out_len`. On allocation failure returns null with `out_len = 0`.
+fn respond(response: &str, out_len: *mut usize) -> *mut u8 {
+    let bytes = response.as_bytes();
     let len = bytes.len();
     let ptr = prism_alloc(len);
     if ptr.is_null() {
+        // SAFETY: caller guarantees out_len is valid (checked in prism_handle).
         unsafe { *out_len = 0 };
         return std::ptr::null_mut();
     }
@@ -356,7 +380,7 @@ fn dispatch_op(op: &str, payload: &serde_json::Value) -> prism_core::Result<serd
                 record.last_position_sec,
                 record.duration_sec,
                 record.last_watched,
-                record.sessions.capacity().max(1),
+                record.sessions.len().max(1),
             );
             Ok(serde_json::json!({ "completed": newly || record.completed, "record": record }))
         }

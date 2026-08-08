@@ -169,7 +169,7 @@ impl Error {
             "operation": self.operation,
             "severity": match self.severity {
                 Severity::Info => "info",
-                Severity::Warning => "warning",
+                Severity::Warning => "warn",
                 Severity::Error => "error",
                 Severity::Critical => "critical",
             },
@@ -200,7 +200,7 @@ mod tests {
         );
         let v = e.to_envelope();
         assert_eq!(v["subsystem"], "filter");
-        assert_eq!(v["severity"], "warning");
+        assert_eq!(v["severity"], "warn");
         assert_eq!(v["code"], "FilterSyntax");
     }
 

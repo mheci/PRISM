@@ -121,15 +121,23 @@ pub fn credibility(
     }
 }
 
-/// Parses a compact count ("1.2M", "34K", "500") to a number.
+/// Parses a compact count ("1.2M views", "34K", "500") to a number.
+/// Tolerates trailing words ("views", "subscribers") after the magnitude.
 pub fn parse_count(text: &str) -> u64 {
     let t = text.trim();
-    let (num, unit) = match t.chars().last() {
+    // Walk backwards to the last magnitude token: number [+ suffix K/M/B]
+    // followed by anything (e.g. "1.2M views").
+    let tokens: Vec<&str> = t.split_whitespace().collect();
+    let Some(first) = tokens.first() else {
+        return 0;
+    };
+    let token = first.trim_end_matches(',');
+    let (num, unit) = match token.chars().last() {
         Some(c) if c.is_ascii_alphabetic() => {
-            let (n, u) = t.split_at(t.len() - 1);
+            let (n, u) = token.split_at(token.len() - 1);
             (n, u.to_ascii_uppercase())
         }
-        _ => (t, String::new()),
+        _ => (token, String::new()),
     };
     let value: f64 = num.replace(',', "").trim().parse().unwrap_or(0.0);
     match unit.as_str() {
@@ -321,6 +329,10 @@ mod tests {
         assert_eq!(parse_count("34K"), 34_000);
         assert_eq!(parse_count("500"), 500);
         assert_eq!(parse_count("2.5B"), 2_500_000_000);
+        assert_eq!(parse_count("1.2M views"), 1_200_000);
+        assert_eq!(parse_count("12K subscribers"), 12_000);
+        assert_eq!(parse_count(""), 0);
+        assert_eq!(parse_count("no number"), 0);
     }
 
     #[test]

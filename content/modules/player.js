@@ -340,25 +340,45 @@
         // exposed in the global hotkey handler below
       }
 
-      // Wire listeners
+      // Wire listeners — attach to the *current* video element only, and
+      // detach from the previous one on navigation so listeners never
+      // accumulate across SPA navigations.
+      const wireVideo = (v) => {
+        if (this._wiredVideo === v) return;
+        if (this._wiredVideo) {
+          try {
+            this._wiredVideo.removeEventListener("ratechange", this._rateHandler);
+            this._wiredVideo.removeEventListener("loadedmetadata", this._metaHandler);
+          } catch (_) {}
+        }
+        this._wiredVideo = v;
+        this._rateHandler = () => chSave(v).catch(() => {});
+        this._metaHandler = () => { applySpeed(); applyLoops(); applyQuality(); chRestore(); };
+        v.addEventListener("ratechange", this._rateHandler, { passive: true });
+        v.addEventListener("loadedmetadata", this._metaHandler, { passive: true });
+      };
       const v0 = videoEl();
-      if (v0) {
-        ctx.on(v0, "ratechange", () => chSave(v0).catch(() => {}), { passive: true });
-        ctx.on(v0, "loadedmetadata", () => { applySpeed(); applyLoops(); applyQuality(); chRestore(); }, { passive: true });
-      }
+      if (v0) wireVideo(v0);
       ctx.on(document, "yt-navigate-finish", () => {
         ctx.timer.timeout(() => {
           const v = videoEl();
-          if (v) {
-            ctx.on(v, "ratechange", () => chSave(v).catch(() => {}), { passive: true });
-            ctx.on(v, "loadedmetadata", () => { applySpeed(); applyLoops(); applyQuality(); chRestore(); }, { passive: true });
-          }
+          if (v) wireVideo(v);
           applySpeed();
           applyLoops();
           applyTheater();
         }, 800);
       }, { passive: true });
-      ctx.timer.interval(applySpeed, 2000);
+      // The speed default is asserted only when a video (re)loads — never
+      // fighting manual rate changes or per-channel memory mid-playback.
+      ctx.timer.interval(() => {
+        const v = videoEl();
+        if (!v || v.readyState < 1) return;
+        // Only nudge when nothing else owns the rate.
+        if (ctx.settings().intelligence.smart_speed) return;
+        if (ctx.settings().player.speed_per_channel) return;
+        const target = Math.max(0.0625, Math.min(16, Number(ctx.settings().player.speed_default) || 1));
+        if (Math.abs(v.playbackRate - target) > 0.01) v.playbackRate = target;
+      }, 10000);
 
       // Global hotkeys: X screenshot handled elsewhere; Shift+S stop.
       this._hotkey = ctx.on(document, "keydown", (e) => {
@@ -376,6 +396,14 @@
     stop() {
       this._stopFns.forEach((f) => f());
       this._stopFns = [];
+      if (this._hotkey) { this._hotkey(); this._hotkey = null; }
+      if (this._wiredVideo) {
+        try {
+          this._wiredVideo.removeEventListener("ratechange", this._rateHandler);
+          this._wiredVideo.removeEventListener("loadedmetadata", this._metaHandler);
+        } catch (_) {}
+        this._wiredVideo = null;
+      }
       document.querySelectorAll(".prism-fr-btn, .prism-stop-btn").forEach((b) => b.remove());
     },
     health() {

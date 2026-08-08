@@ -86,6 +86,48 @@ fn as_obj(v: &serde_json::Value) -> Option<&serde_json::Map<String, serde_json::
     v.as_object()
 }
 
+/// Recursively unwraps card-like renderers (incl. `richItemRenderer.content`
+/// and `richGridMediaViewModel.content`) down to the innermost renderer
+/// object, so endpoint/audio flags nested several levels deep are found.
+fn unwrap_renderer(node: &serde_json::Value, depth: usize) -> &serde_json::Value {
+    if depth > 8 {
+        return node;
+    }
+    let Some(obj) = as_obj(node) else {
+        return node;
+    };
+    let mut target = WRAPPER_KEYS.iter().find_map(|k| obj.get(*k));
+    if target.is_none() {
+        if let Some(content) = obj.get("richItemRenderer").and_then(|v| v.get("content")) {
+            if WRAPPER_KEYS.iter().any(|k| content.get(*k).is_some()) {
+                target = Some(content);
+            }
+        }
+    }
+    if target.is_none() {
+        if let Some(vm) = obj.get("richGridMediaViewModel") {
+            if let Some(content) = vm.get("content") {
+                target = WRAPPER_KEYS
+                    .iter()
+                    .find_map(|k| content.get(*k))
+                    .or(Some(content));
+            }
+        }
+    }
+    // A view-model object reached directly: descend into its content.
+    if target.is_none() {
+        if let Some(content) = obj.get("content") {
+            if WRAPPER_KEYS.iter().any(|k| content.get(*k).is_some()) {
+                target = Some(content);
+            }
+        }
+    }
+    if let Some(inner) = target {
+        return unwrap_renderer(inner, depth + 1);
+    }
+    node
+}
+
 fn node_is_shorts(node: &serde_json::Value, opts: &ScrubOptions) -> bool {
     let Some(obj) = as_obj(node) else {
         return false;
@@ -93,28 +135,7 @@ fn node_is_shorts(node: &serde_json::Value, opts: &ScrubOptions) -> bool {
     if SHORTS_KEYS.iter().any(|k| obj.contains_key(*k)) {
         return true;
     }
-    // Unwrap card-like renderers so endpoints inside them count. Some
-    // wrappers nest content one level deeper (richItemRenderer.content).
-    let mut target = WRAPPER_KEYS
-        .iter()
-        .find_map(|k| obj.get(*k))
-        .unwrap_or(node);
-    if let Some(content) = obj.get("richItemRenderer").and_then(|v| v.get("content")) {
-        if WRAPPER_KEYS.iter().any(|k| content.get(*k).is_some()) {
-            target = content;
-        }
-    }
-    // One more unwrap: the wrapper value itself may hold a renderer
-    // (videoRenderer.navigationEndpoint), or a view model with content.
-    let mut again = WRAPPER_KEYS.iter().find_map(|k| target.get(*k));
-    if let Some(vm) = target.get("richGridMediaViewModel") {
-        if let Some(content) = vm.get("content") {
-            again = again.or_else(|| WRAPPER_KEYS.iter().find_map(|k| content.get(*k)));
-        }
-    }
-    if let Some(inner) = again {
-        target = inner;
-    }
+    let target = unwrap_renderer(node, 0);
     let Some(obj) = as_obj(target) else {
         return false;
     };
@@ -161,14 +182,8 @@ fn text_contains_dub(text: &str) -> bool {
 }
 
 fn node_is_dubbed(node: &serde_json::Value) -> bool {
-    let Some(obj) = as_obj(node) else {
-        return false;
-    };
     // Unwrap card-like renderers so flags nested inside them count.
-    let target = WRAPPER_KEYS
-        .iter()
-        .find_map(|k| obj.get(*k))
-        .unwrap_or(node);
+    let target = unwrap_renderer(node, 0);
     let Some(obj) = as_obj(target) else {
         return false;
     };
@@ -252,26 +267,74 @@ fn scrub_value(
             false
         }
         serde_json::Value::Object(map) => {
-            let mut became_empty = false;
-            for value in map.values_mut() {
-                scrub_value(value, depth + 1, mode, opts, stats);
-            }
-            // If a shelf key's contents emptied, signal parent.
+            // Post-order: children first. Track shelf-like keys whose
+            // contents became empty so their shells are removed too.
+            let mut emptied_keys: Vec<String> = Vec::new();
             for key in SHELF_KEYS {
-                if let Some(v) = map.get(*key) {
-                    if is_empty_contents(v) {
-                        became_empty = true;
-                        break;
+                if let Some(v) = map.get_mut(*key) {
+                    // The child already removed its emptied shelf content
+                    // (post-removal shape may no longer look "empty"), so
+                    // its boolean signal is the source of truth.
+                    if scrub_value(v, depth + 1, mode, opts, stats) {
+                        emptied_keys.push((*key).to_string());
                     }
                 }
             }
-            if became_empty {
-                stats.empty_shelves += 1;
+            // Non-shelf children (e.g. "content" wrappers) may also report
+            // emptiness; propagate it.
+            let mut became_empty = false;
+            for (key, value) in map.iter_mut() {
+                if SHELF_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
+                if scrub_value(value, depth + 1, mode, opts, stats) {
+                    became_empty = true;
+                }
             }
-            became_empty
+            for key in &emptied_keys {
+                map.remove(key);
+            }
+            if !emptied_keys.is_empty() {
+                stats.empty_shelves += emptied_keys.len();
+                // We removed shelf content ourselves: this object is now a
+                // shell and must be dropped by its parent.
+                return true;
+            }
+            // The object itself is a shelf-like container whose contents
+            // emptied (or a content-wrapper around one).
+            if became_empty || is_empty_contents_object(map) {
+                if became_empty {
+                    stats.empty_shelves += 1;
+                }
+                return true;
+            }
+            false
         }
         _ => false,
     }
+}
+
+/// True when an object is a container whose `contents` (directly or under
+/// `content.<shelf>`) is now empty — i.e. it should be removed by its parent.
+fn is_empty_contents_object(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if let Some(arr) = map.get("contents").and_then(serde_json::Value::as_array) {
+        return arr.is_empty();
+    }
+    if let Some(content) = map.get("content") {
+        for key in SHELF_KEYS {
+            if let Some(inner) = content.get(*key) {
+                if inner
+                    .get("contents")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// After removals, renumber sequential playlist items so index badges stay
@@ -303,24 +366,6 @@ fn renumber_playlist_items(items: &mut [serde_json::Value]) {
         }
         index += 1;
     }
-}
-
-/// Whether a shelf value's contents array is empty.
-fn is_empty_contents(value: &serde_json::Value) -> bool {
-    if let Some(arr) = value.get("contents").and_then(serde_json::Value::as_array) {
-        return arr.is_empty();
-    }
-    if let Some(inner) = value
-        .get("content")
-        .and_then(|v| v.get("verticalListRenderer"))
-    {
-        return inner
-            .get("contents")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| a.is_empty())
-            .unwrap_or(false);
-    }
-    false
 }
 
 /// Entry point: scrubs a full innertube JSON document in place.
@@ -578,6 +623,81 @@ mod tests {
                         "videoRenderer": {
                             "videoId": "s",
                             "navigationEndpoint": {"reelWatchEndpoint": {"videoId": "s"}}
+                        }
+                    }
+                }
+            }]
+        });
+        let stats = scrub(
+            &mut doc,
+            ScrubMode {
+                shorts: true,
+                auto_dubbed: false,
+            },
+            &ScrubOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(stats.removed, 1);
+    }
+
+    #[test]
+    fn empty_shelf_removed_through_content_wrapper() {
+        let mut doc = json!({
+            "richGridRenderer": {"contents": [
+                {"richSectionRenderer": {
+                    "content": {"richShelfRenderer": {
+                        "contents": [{"reelItemRenderer": {"videoId": "x"}}]
+                    }}
+                }}
+            ]}
+        });
+        let stats = scrub(
+            &mut doc,
+            ScrubMode {
+                shorts: true,
+                auto_dubbed: false,
+            },
+            &ScrubOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(stats.removed, 1);
+        let contents = doc["richGridRenderer"]["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 0, "empty section shells must be removed");
+        assert!(stats.empty_shelves >= 1);
+    }
+
+    #[test]
+    fn detects_dubbed_inside_rich_item() {
+        let mut doc = json!({
+            "contents": [{
+                "richItemRenderer": {
+                    "content": {
+                        "videoRenderer": {"videoId": "d", "audioTrack": {"isAutoDubbed": true}}
+                    }
+                }
+            }]
+        });
+        let stats = scrub(
+            &mut doc,
+            ScrubMode {
+                shorts: false,
+                auto_dubbed: true,
+            },
+            &ScrubOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(stats.removed, 1);
+    }
+
+    #[test]
+    fn detects_shorts_inside_rich_grid_media_view_model() {
+        let mut doc = json!({
+            "contents": [{
+                "richGridMediaViewModel": {
+                    "content": {
+                        "videoRenderer": {
+                            "videoId": "s2",
+                            "navigationEndpoint": {"reelWatchEndpoint": {"videoId": "s2"}}
                         }
                     }
                 }

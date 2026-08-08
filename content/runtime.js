@@ -16,7 +16,9 @@
   "use strict";
 
   const PROTOCOL = 1;
-  const token = crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now();
+  // The bridge owns the channel token; we adopt it from the core.ready
+  // handshake so replies and requests share one secret.
+  let bridgeToken = null;
 
   // ── bridge client (async request/response) ──────────────────────────────
   const pending = new Map();
@@ -25,15 +27,14 @@
   function bridgeCall(op, payload) {
     return new Promise((resolve, reject) => {
       const id = nextId++;
-      pending.set(id, { resolve, reject });
-      window.postMessage({ prism: PROTOCOL, id, token, op, payload }, "*");
-      // Hard timeout so a dead bridge never wedges a feature.
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
           reject(new Error("bridge timeout: " + op));
         }
       }, 15000);
+      pending.set(id, { resolve, reject, timer });
+      window.postMessage({ prism: PROTOCOL, id, token: bridgeToken, op, payload }, "*");
     });
   }
 
@@ -50,10 +51,14 @@
 
   window.addEventListener("message", (event) => {
     const msg = event.data;
-    if (!msg || msg.prism !== PROTOCOL || msg.token !== token) return;
+    if (!msg || msg.prism !== PROTOCOL) return;
     const p = pending.get(msg.id);
     if (!p) return;
     pending.delete(msg.id);
+    clearTimeout(p.timer);
+    // Adopt the bridge token from the handshake response.
+    if (bridgeToken === null && msg.token) bridgeToken = msg.token;
+    if (bridgeToken !== null && msg.token !== bridgeToken) return;
     if (msg.ok) p.resolve(msg);
     else p.reject(new Error((msg.error && msg.error.message) || "bridge error"));
   });
@@ -63,6 +68,9 @@
     set: (key, value) => bridgeCall("storage.set", { key, value }),
     remove: (key) => bridgeCall("storage.remove", { key }),
   };
+  // Generic bridge op for extension-only actions (e.g. opening the options
+  // page from the MAIN world, which has no browser API).
+  const call = (op, payload) => bridgeCall(op, payload);
 
   // ── scheduler (adaptive timers) ─────────────────────────────────────────
   // All module timers go through here. Intervals stretch while the tab is
@@ -95,6 +103,8 @@
         } catch (err) {
           reportError("scheduler", err);
         }
+        // Re-check after fn(): a callback may have cancelled itself.
+        if (!this._intervals.has(id)) return;
         const dt = performance.now() - t0;
         backoff = dt > 12 ? Math.min(4, backoff * 1.3) : Math.max(1, backoff / 1.3);
         this._intervals.set(id, setTimeout(tick, Math.max(150, baseMs * this._factor() * backoff)));
@@ -138,6 +148,9 @@
   }
   function reportError(subsystem, err) {
     log("error", subsystem, String((err && err.message) || err));
+    try {
+      console.error("[PRISM]", subsystem, (err && err.stack) || (err && err.message) || err);
+    } catch (_) {}
   }
 
   // ── module registry ─────────────────────────────────────────────────────
@@ -157,23 +170,36 @@
     });
   }
 
+  // Guards a module callback: records failures (consecutive), resets the
+  // counter on success, and handles both sync throws and async rejections.
   function withGuard(moduleId, fn) {
     return (...args) => {
       if (quarantined.has(moduleId)) return;
       const t0 = performance.now();
-      try {
-        return fn(...args);
-      } catch (err) {
+      const onSuccess = () => {
+        failures.set(moduleId, 0);
+        logMetric(moduleId, performance.now() - t0);
+      };
+      const onError = (err) => {
         reportError(moduleId, err);
         const n = (failures.get(moduleId) || 0) + 1;
         failures.set(moduleId, n);
+        logMetric(moduleId, performance.now() - t0);
         if (n >= 3) {
           quarantined.add(moduleId);
           log("critical", moduleId, "quarantined after 3 consecutive failures");
           stopModule(moduleId);
         }
-      } finally {
-        logMetric(moduleId, performance.now() - t0);
+      };
+      try {
+        const r = fn(...args);
+        if (r && typeof r.then === "function") {
+          return r.then(onSuccess, onError);
+        }
+        onSuccess();
+        return r;
+      } catch (err) {
+        onError(err);
       }
     };
   }
@@ -189,6 +215,9 @@
   async function startModule(moduleId) {
     const m = modules.get(moduleId);
     if (!m || m.state === "started" || quarantined.has(moduleId)) return;
+    // If this is a restart, tear the previous instance down first so
+    // timers/listeners never accumulate.
+    if (m.state !== "registered") stopModule(moduleId);
     // deps first
     for (const dep of m.deps) {
       await startModule(dep);
@@ -199,6 +228,7 @@
       await m.init(ctx);
       if (typeof m.start === "function") await m.start(ctx);
       m.state = "started";
+      failures.set(moduleId, 0);
       log("info", moduleId, "started");
     } catch (err) {
       reportError(moduleId, err);
@@ -221,6 +251,15 @@
     } catch (err) {
       reportError(moduleId, err);
     }
+    // Release every lifecycle-scoped timer and listener.
+    for (const stop of m.timers) {
+      try { stop(); } catch (_) {}
+    }
+    m.timers = [];
+    for (const off of m.listeners) {
+      try { off(); } catch (_) {}
+    }
+    m.listeners = [];
     m.state = "stopped";
   }
 
@@ -280,6 +319,7 @@
 
   function updateSetting(path, value) {
     // path like "player.speed_default"
+    if (!runtimeSettings) return; // not loaded yet; ignore
     const parts = path.split(".");
     let obj = runtimeSettings;
     for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
@@ -310,6 +350,7 @@
       for (const m of modules.values()) {
         if (m.state === "failed" && !quarantined.has(m.id)) {
           log("warn", m.id, "watchdog restarting failed module");
+          stopModule(m.id); // releases timers/listeners from the failed run
           m.state = "registered";
           startModule(m.id).catch(() => {});
         }
@@ -332,6 +373,7 @@
     }),
     core: coreCall,
     storage,
+    call,
     settings: () => runtimeSettings,
     updateSetting,
     registerModule,

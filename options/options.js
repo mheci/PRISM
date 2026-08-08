@@ -313,6 +313,41 @@
   const searchIndex = [];
   GROUPS.forEach((g) => g.items.forEach(([path, label, desc]) => searchIndex.push({ path, label, desc, group: g.name })));
 
+  // Minimal default shape so a fresh profile renders usable controls before
+  // any content script has ever persisted settings (the Rust core is the
+  // real authority on validation; this only prevents crashes/undefined UI).
+  const DEFAULTS = {
+    schema_version: 1,
+    profile: "",
+    privacy_shield: false,
+    toasts: "normal",
+    player: { speed_default: 1, speed_per_channel: false, loop_video: false, quality_pref: "hd1080", seek_step_sec: 10, keep_screen_awake: false, screenshot_format: "png", screenshot_scale: 1, screenshot_clipboard: false, sleep_timer_min: 30, auto_pause_hidden: false, auto_pause_blurred: false, resume_auto_paused: false, pause_background_tabs: false, confirm_leave_playing: false, auto_recover_video: false, skip_ads: false, default_original_audio: false, hfr_allow: false, restore_fs_scroll: false, theater_default: false, theater_wide: false, cinema_opacity: 0.85, ambient_blur_px: 24, ambient_opacity: 0.5, flip_h: false, flip_v: false, filter_brightness: 100, filter_contrast: 100, filter_saturation: 100, filter_hue_deg: 0, filter_grayscale: false, filter_zoom_pct: 100, top_progress_bar: false, remaining_badge: false, clock_badge: false, end_soon_warn: false, end_soon_sec: 20, force_watched_account: true, force_watched_local: true, idle_dim: false, idle_dim_delay_sec: 60, idle_dim_blur_px: 6 },
+    captions: { enabled: false, lang: "", fallback_langs: ["en", "en-US", "en-GB"], kind_pref: "any", auto_translate: false, translate_to: "", skip_music: false, skip_shorts: false, respect_manual_off: false, reengage_after_ad: false, native_prefs: false, font_size_px: 28, font_family: "Roboto, Arial, sans-serif", font_weight: 700, text_color: "#ffffff", bg_color: "#000000", bg_opacity_pct: 72, text_shadow: "outline", line_height: 1.25, letter_spacing_em: 0, position: "bottom", radius_px: 4, uppercase: false },
+    sponsorblock: { enabled: true, privacy: false, toasts: false, seekbar_marks: true, hud: true, category_actions: {}, hidden_videos: [] },
+    history: { enabled: false, resume_mode: "silent", max_sessions_per_video: 50, history_capacity: 20000, track_clicks: false, watch_insights: false },
+    feed: { channel_blocklist: "", hide_blocked_watch: false, hide_blocked_browse: false, hide_blocked_comments: false, keywords: "", watched_mode: "off", number_results: false, highlight_long: false, highlight_short: false, long_min_sec: 1200, short_max_sec: 60, hide_live: false, hide_premieres: false, hide_top_live_games: false, blur_thumbnails: false, blur_px: 12, disable_previews: false, dense_grid: false, remove_shorts: false, shorts_redirect: false, shorts_dom_clean: false, shorts_api_filter: false, hide_auto_dubbed: false, restore_original_audio: false },
+    comments: { collapse_long: false, collapse_threshold_chars: 1200, highlight_creator: false, highlight_timestamps: false, search_bar: false },
+    privacy: { geo_override: false, geo_region: "US", geo_lang: "en", geo_timezone: "", patch_fetch: false, patch_xhr: false, patch_beacon: false, patch_navigator: false, cookie_control: false, cookie_live: false, block_yt_ai: false },
+    network: { monitor: false, badge: false, patch_fetch: true, patch_xhr: true, patch_beacon: true, track_qualities: false, budget_enabled: false, budget_gb: 50 },
+    perf: { enabled: false, tier: "balanced", auto_enable: false, fps_counter: false, fps_pos: "tl", buffer_health: false, dropped_frames: false, dropped_pos: "tr", dropped_show_rate: false, dropped_reset_on_nav: true, long_task_warn: false, long_task_threshold_ms: 50, stats_overlay: false, profiler: false, diag_console: false },
+    theme: { enabled: false, selected: "none", glass_overhaul: false, accent_hue: 215, focus_ring: false, sidebar_active: false, gen_color: "#ff3d7f" },
+    discovery: { anti_rec: false, momentum: false, time_machine: false, time_machine_years: 1, small_creator: false, small_creator_max_subs: 10000, feed_size: 20, vibe_search: false, credibility: false, search_remix: false, outdated_detector: false, watch_genome: false, algo_intelligence: false, collections: false },
+    intelligence: { scene_jumper: false, video_dna: false, smart_speed: false, smart_speed_base: 1, smart_speed_fast: 1.5, smart_queue: false },
+    chrome: { player_dash_button: true, copy_timestamp_btn: false, copy_info_btn: false, transcript_btn: false, video_notes: false, channel_notes: false, chapter_hotkeys: false, chapter_buttons: false, chapter_panel: false, fwd_rewind_buttons: false, stop_button: false, flip_buttons: false, pip_button: false, logo_to_subs: false, default_channel_tab: "featured", auto_expand_desc: false, disable_autoplay: false, remove_redirects: false, shorten_share: false, dismiss_pause_dialog: false, reverse_playlist: false, playlist_autoscroll: false, compact_playlist: false, shorts_auto_mute: false, shorts_hide_comments: false, top_bar_hide: false, hide_banner_ads: false, compact_ui: false, hide_recs: false, hide_comments: false, hide_endscreen: false, hide_livechat: false, hide_watermark: false, hide_info_cards: false, always_progress_bar: false, hidden_elements: [] },
+    budget: { enabled: false, session_minutes: 60, daily_minutes: 0 },
+    signals: { dearrow: false, ryd: false, local_ai: false },
+  };
+  function deepMerge(base, patch) {
+    for (const k of Object.keys(patch)) {
+      if (patch[k] && typeof patch[k] === "object" && !Array.isArray(patch[k]) && base[k] && typeof base[k] === "object" && !Array.isArray(base[k])) {
+        deepMerge(base[k], patch[k]);
+      } else if (patch[k] !== undefined) {
+        base[k] = patch[k];
+      }
+    }
+    return base;
+  }
+
   // ── rendering ──
   function renderNav() {
     const nav = $("nav");
@@ -342,7 +377,10 @@
   function setValue(path, value) {
     const parts = path.split(".");
     let o = settings;
-    for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (typeof o[parts[i]] !== "object" || o[parts[i]] === null) o[parts[i]] = {};
+      o = o[parts[i]];
+    }
     o[parts[parts.length - 1]] = value;
     persist();
   }
@@ -389,8 +427,14 @@
       inp.min = control.min;
       inp.max = control.max;
       inp.step = control.step;
-      inp.value = getValue(path);
-      inp.addEventListener("change", () => setValue(path, Number(inp.value)));
+      inp.value = getValue(path) ?? control.min ?? 0;
+      inp.addEventListener("change", () => {
+        let v = Number(inp.value);
+        if (control.min !== undefined && v < control.min) v = control.min;
+        if (control.max !== undefined && v > control.max) v = control.max;
+        inp.value = v;
+        setValue(path, v);
+      });
       wrap.appendChild(inp);
     } else if (control.t === "textarea") {
       const ta = document.createElement("textarea");
@@ -484,26 +528,57 @@
       if (tab && tab.url && /^https:\/\/(www\.|m\.|music\.)?youtube\.com/.test(tab.url)) {
         const res = await browser.tabs.sendMessage(tab.id, { type: "prism:ping" }).catch(() => null);
         const body = $("diag-body");
+        if (!body) return;
         if (res && res.engine) {
           const h = res.engine;
           const modules = h.modules || [];
-          const rows = modules.map((m) =>
-            '<div class="module-row"><span class="name">' + m.id + '</span><span class="badge ' + (m.quarantined ? "err" : m.state === "started" ? "ok" : "warn") + '">' + (m.quarantined ? "quarantined" : m.state) + "</span></div>"
-          ).join("");
-          body.innerHTML =
-            '<div class="stat" style="margin-bottom:10px"><div class="v">' + Math.round((h.uptimeMs || 0) / 1000) + 's</div><div class="l">uptime</div></div>' +
-            '<div class="module-row"><span class="name">Modules</span><span>' + modules.length + "</span></div>" +
-            rows;
+          // Build rows with createElement/textContent: module ids/states come
+          // from the MAIN world (page-controlled) and must never hit innerHTML.
+          body.replaceChildren();
+          const stat = document.createElement("div");
+          stat.className = "stat";
+          stat.style.marginBottom = "10px";
+          const v = document.createElement("div");
+          v.className = "v";
+          v.textContent = Math.round((h.uptimeMs || 0) / 1000) + "s";
+          const l = document.createElement("div");
+          l.className = "l";
+          l.textContent = "uptime";
+          stat.append(v, l);
+          body.appendChild(stat);
+          const head = document.createElement("div");
+          head.className = "module-row";
+          const name = document.createElement("span");
+          name.className = "name";
+          name.textContent = "Modules";
+          const count = document.createElement("span");
+          count.textContent = String(modules.length);
+          head.append(name, count);
+          body.appendChild(head);
+          modules.forEach((m) => {
+            const row = document.createElement("div");
+            row.className = "module-row";
+            const n = document.createElement("span");
+            n.className = "name";
+            n.textContent = m.id;
+            const badge = document.createElement("span");
+            badge.className = "badge " + (m.quarantined ? "err" : m.state === "started" ? "ok" : "warn");
+            badge.textContent = m.quarantined ? "quarantined" : m.state;
+            row.append(n, badge);
+            body.appendChild(row);
+          });
         } else if (res && res.core) {
-          body.innerHTML = "<p>Core is live; engine not yet booted on this tab.</p>";
+          body.textContent = "Core is live; engine not yet booted on this tab.";
         } else {
-          body.innerHTML = "<p>No PRISM runtime detected in the active tab.</p>";
+          body.textContent = "No PRISM runtime detected in the active tab.";
         }
       } else {
-        $("diag-body").innerHTML = "<p>Open a YouTube tab to see live diagnostics.</p>";
+        const b2 = $("diag-body");
+        if (b2) b2.textContent = "Open a YouTube tab to see live diagnostics.";
       }
     } catch (_) {
-      $("diag-body").innerHTML = "<p>No tab available.</p>";
+      const b3 = $("diag-body");
+      if (b3) b3.textContent = "No tab available.";
     }
   }
 
@@ -579,10 +654,24 @@
       });
       input.click();
     });
-    $("profiles-btn").addEventListener("click", () => showModal(
-      "<h3>Profiles</h3><p class='hint'>Profiles are named setting snapshots. (Storage model ready; UI ships in the next iteration.)</p>" +
-      '<button class="ghost-btn" onclick="document.getElementById(\'modal\').hidden=true">Close</button>'
-    ));
+    $("profiles-btn").addEventListener("click", () => {
+      const modal = $("modal");
+      modal.replaceChildren();
+      const box = document.createElement("div");
+      box.className = "modal-box";
+      const title = document.createElement("h3");
+      title.textContent = "Profiles";
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.textContent = "Profiles are named setting snapshots. (Storage model ready; UI ships in the next iteration.)";
+      const close = document.createElement("button");
+      close.className = "ghost-btn";
+      close.textContent = "Close";
+      close.addEventListener("click", () => { modal.hidden = true; });
+      box.append(title, note, close);
+      modal.appendChild(box);
+      modal.hidden = false;
+    });
   }
   function showModal(html) {
     const modal = $("modal");
@@ -594,11 +683,15 @@
   // ── boot ──
   async function init() {
     $("ver").textContent = browser.runtime.getManifest().version;
+    let loaded = {};
     try {
-      settings = JSON.parse(await getSetting());
+      loaded = JSON.parse(await getSetting()) || {};
     } catch (_) {
-      settings = {};
+      loaded = {};
     }
+    // Deep-merge over defaults: a fresh profile renders usable controls and
+    // partial blobs never produce undefined reads.
+    settings = deepMerge(structuredClone(DEFAULTS), loaded);
     renderNav();
     renderContent();
     setupPalette();

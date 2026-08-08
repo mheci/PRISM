@@ -37,7 +37,7 @@
       else { root.setAttribute("light", ""); root.removeAttribute("dark"); }
       try { root.style.colorScheme = dark ? "dark" : "light"; } catch (_) {}
       try {
-        if (window.ytcfg && ytcfg_set) ytcfg_set("BACKGROUND_COLOR", dark ? "#0f0f0f" : "#ffffff");
+        if (window.ytcfg && window.ytcfg.set) window.ytcfg.set("BACKGROUND_COLOR", dark ? "#0f0f0f" : "#ffffff");
       } catch (_) {}
 
       let el = document.getElementById(THEME_STYLE_ID);
@@ -49,9 +49,8 @@
       const hue = t.accent_hue || 215;
       const accent = entry.palette ? entry.palette.call_to_action : "#3ea6ff";
       el.textContent =
-        css +
-        "html,html[dark],ytd-app,ytd-masthead,ytd-guide-renderer,ytd-watch-flexy,ytd-browse,#page-manager.ytd-app{background-color:var(--prism-base)!important}" +
-        "--prism-base:" + (entry.palette ? entry.palette.base_background : "#0f0f0f") + ";";
+        "html,html[dark],ytd-app{--prism-base:" + (entry.palette ? entry.palette.base_background : "#0f0f0f") + "}" +
+        css;
       this._guard = new MutationObserver(() => {
         const el2 = document.getElementById(THEME_STYLE_ID);
         if (!el2 && el.isConnected === false) {
@@ -150,6 +149,10 @@
           fetch("https://sponsor.ajay.app/api/brandedTitle?videoID=" + encodeURIComponent(id)).then((r) => r.json()).then((data) => {
             if (!data || !data.title || String(data.title).trim() === String(original).trim()) return;
             if (this._dearrowCache.has(id)) return;
+            if (this._dearrowCache.size >= 200) {
+              const oldest = this._dearrowCache.keys().next().value;
+              if (oldest !== undefined) this._dearrowCache.delete(oldest);
+            }
             this._dearrowCache.set(id, data.title);
             const chip = document.createElement("button");
             chip.type = "button";
@@ -187,7 +190,7 @@
             box.innerHTML =
               '<div style="height:4px;border-radius:2px;background:rgba(255,255,255,.1);overflow:hidden;display:flex"><div style="background:#3ea6ff;height:100%;width:' + pct + '%"></div><div style="background:#ff5252;height:100%;flex:1"></div></div>' +
               '<div style="font:600 10.5px system-ui;color:#aaa;display:flex;justify-content:space-between"><span style="color:#3ea6ff">' + pct + '% like</span><span>' + fmt(d.likes) + " vs " + fmt(d.dislikes) + "</span></div>";
-            const seg = document.querySelector("ytd-segmented-like-dislike-button-renderer");
+            const seg = document.querySelector("ytd-segmented-like-dislike-button-renderer, like-button-view-model");
             if (seg && seg.parentElement) seg.parentElement.insertBefore(box, seg.nextSibling);
             else document.querySelector("#below") && document.querySelector("#below").appendChild(box);
           }).catch(() => {});
@@ -274,8 +277,9 @@
 
       if (p.fps_counter) {
         const box = this._mk("prism-fps", p.fps_pos);
-        let frames = 0, t0 = performance.now();
+        let frames = 0, t0 = performance.now(), rafId = 0;
         const loop = () => {
+          if (!this._ctx.settings().perf.fps_counter) return;
           frames++;
           const now = performance.now();
           const dt = now - t0;
@@ -287,10 +291,11 @@
             box.style.color = fps < 24 ? "#ff5252" : fps < 50 ? "#ffd166" : "#4caf50";
             frames = 0; t0 = now;
           }
-          if (document.hidden) setTimeout(loop, 250);
-          else requestAnimationFrame(loop);
+          if (document.hidden) rafId = setTimeout(loop, 250);
+          else rafId = requestAnimationFrame(loop);
         };
-        requestAnimationFrame(loop);
+        rafId = requestAnimationFrame(loop);
+        this._rafId = rafId;
       }
 
       if (p.buffer_health) {
@@ -353,6 +358,11 @@
       return el;
     },
     stop() {
+      if (this._rafId) {
+        try { cancelAnimationFrame(this._rafId); } catch (_) {}
+        clearTimeout(this._rafId);
+        this._rafId = null;
+      }
       this._els.forEach((e) => e.remove());
       this._els = [];
     },
