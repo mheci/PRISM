@@ -44,14 +44,16 @@ const auth = () => ({ Authorization: `JWT ${jwt()}` });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Retries transient failures (429 throttle, 5xx) with exponential backoff.
+// The JWT is refreshed on every attempt (AMO tokens expire in ~5 minutes).
 async function fetchRetry(url, opts, { attempts = 6, baseMs = 15000 } = {}) {
   let last;
   for (let i = 0; i < attempts; i++) {
-    const res = await fetch(url, opts);
+    const attemptOpts = { ...opts, headers: { ...(opts.headers || {}), ...auth() } };
+    const res = await fetch(url, attemptOpts);
     if (res.status !== 429 && res.status < 500) return res;
     last = res;
     const retryAfter = Number(res.headers.get("retry-after")) || 0;
-    const waitMs = Math.min(120000, Math.max(5000, retryAfter * 1000 || baseMs * 2 ** i));
+    const waitMs = Math.min(600000, Math.max(5000, retryAfter * 1000 || baseMs * 2 ** i));
     console.log(`  throttled (${res.status}) — retrying in ${Math.round(waitMs / 1000)}s`);
     await sleep(waitMs);
   }
@@ -105,11 +107,15 @@ async function submit(uuid) {
     console.log(`Created add-on ${GUID}, submitted version ${created.version && created.version.version}`);
     return created.version && created.version.id;
   }
-  const vres = await fetchRetry(`${API}/addon/${GUID}/versions/`, {
-    method: "POST",
-    headers: Object.assign({ "Content-Type": "application/json" }, auth()),
-    body: JSON.stringify({ upload: uuid }),
-  });
+  const vres = await fetchRetry(
+    `${API}/addon/${GUID}/versions/`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ upload: uuid }),
+    },
+    { attempts: 12, baseMs: 30000 }
+  );
   const vbody = await vres.json().catch(() => ({}));
   if (!vres.ok) {
     console.error(`Version submission failed (${vres.status}):`, JSON.stringify(vbody).slice(0, 600));
