@@ -118,8 +118,7 @@ async function submit(uuid) {
   );
   const vbody = await vres.json().catch(() => ({}));
   if (!vres.ok) {
-    console.error(`Version submission failed (${vres.status}):`, JSON.stringify(vbody).slice(0, 600));
-    process.exit(1);
+    throw new Error(`version submission failed (${vres.status}): ${JSON.stringify(vbody).slice(0, 600)}`);
   }
   console.log(`Submitted new version ${vbody.version} — id ${vbody.id}`);
   return vbody.id;
@@ -129,7 +128,7 @@ async function pollSigned(versionId) {
   const deadline = Date.now() + TIMEOUT_MS;
   let last = "";
   while (Date.now() < deadline) {
-    const res = await fetch(`${API}/addon/${GUID}/versions/${versionId}/`, { headers: auth() });
+    const res = await fetchRetry(`${API}/addon/${GUID}/versions/${versionId}/`, { headers: auth() }, { attempts: 4, baseMs: 15000 });
     const v = await res.json().catch(() => ({}));
     const status = v.status || "unknown";
     if (status !== last) {
@@ -160,6 +159,29 @@ async function download(url) {
   console.log(`Saved dist/prism-signed.xpi (${(buf.length / 1024).toFixed(1)} KB)`);
 }
 
-const url = await pollSigned(await submit(await waitValidated(await stage())));
-await download(url);
-console.log("Signing complete — artifact never published to AMO.");
+// Full pipeline with re-stage on stale-upload failure (AMO uploads expire
+// while the submit endpoint is throttled).
+async function run() {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const uuid = await stage();
+      await waitValidated(uuid);
+      const versionId = await submit(uuid);
+      const url = await pollSigned(versionId);
+      await download(url);
+      console.log("Signing complete — artifact never published to AMO.");
+      return;
+    } catch (err) {
+      const msg = String(err && err.message || err);
+      // A stale upload surfaces as a 400 on submit; re-stage and retry.
+      if (/upload.*required|expired|not found/i.test(msg) && attempt < 3) {
+        console.log(`  upload issue (${msg.slice(0, 80)}) — re-staging (attempt ${attempt + 1})`);
+        continue;
+      }
+      console.error("Signing error:", msg);
+      process.exit(1);
+    }
+  }
+}
+
+await run();
