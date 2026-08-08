@@ -23,6 +23,31 @@ const bundle = path.join(root, "dist", "content", "engine.js");
 if (!fs.existsSync(bundle)) fail("engine bundle missing — run npm run build");
 else ok("engine bundle present (" + (fs.statSync(bundle).size / 1024).toFixed(1) + " KB)");
 
+// 2b. manifest references resolve inside the zip
+{
+  const zipPath2 = path.join(root, "dist", "prism.zip");
+  if (fs.existsSync(zipPath2)) {
+    const zip = fs.readFileSync(zipPath2);
+    const entries = [];
+    let off = 0;
+    while (off + 4 <= zip.length && zip.readUInt32LE(off) === 0x04034b50) {
+      const nameLen = zip.readUInt16LE(off + 26);
+      const extraLen = zip.readUInt16LE(off + 28);
+      const csize = zip.readUInt32LE(off + 18);
+      entries.push(zip.slice(off + 30, off + 30 + nameLen).toString("utf8"));
+      off += 30 + nameLen + extraLen + csize;
+    }
+    const refs = [];
+    for (const cs of manifest.content_scripts || []) refs.push(...(cs.js || []));
+    if (manifest.background?.scripts) refs.push(...manifest.background.scripts);
+    if (manifest.options_ui?.page) refs.push(manifest.options_ui.page);
+    if (manifest.action?.default_popup) refs.push(manifest.action.default_popup);
+    const missing = refs.filter((r) => !entries.includes(r));
+    if (missing.length) fail("manifest references missing from zip: " + missing.join(", "));
+    else ok("manifest references resolve (" + refs.length + " files)");
+  }
+}
+
 // 3. wasm
 const wasm = path.join(root, "dist", "prism-core.wasm");
 if (!fs.existsSync(wasm)) fail("prism-core.wasm missing");

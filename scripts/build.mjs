@@ -81,22 +81,31 @@ function packageZip() {
   const manifest = fs.readFileSync(path.join(root, "manifest.json"));
   zipEntry(entries, "manifest.json", manifest);
 
-  // Copy the extension tree (everything except build dirs).
-  const skip = new Set(["dist", "target", "node_modules", ".git", "scripts", "crates", "docs"]);
+  // Copy the extension tree (everything except build/dev files).
+  // The bridge ships from content/; the engine ships bundled in dist/.
+  const skip = new Set([
+    "dist", "target", "node_modules", ".git", "scripts", "crates", "docs",
+    ".github", "Cargo.toml", "Cargo.lock", "package.json", "package-lock.json",
+    ".gitignore", "README.md", "LICENSE",
+    "content/runtime.js", "content/boot.js", "content/modules",
+  ]);
   const walk = (dir, base) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (skip.has(entry.name)) continue;
-      const full = path.join(dir, entry.name);
       const rel = path.posix.join(base, entry.name);
+      if (skip.has(entry.name) || skip.has(rel)) continue;
+      const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full, rel);
       else zipEntry(entries, rel, fs.readFileSync(full));
     }
   };
   walk(root, "");
 
-  // WASM core must be in dist/ path referenced by the bridge.
+  // WASM core + engine bundle must be in dist/ paths referenced by the
+  // manifest/bridge.
   const wasm = fs.readFileSync(path.join(dist, "prism-core.wasm"));
   zipEntry(entries, "dist/prism-core.wasm", wasm);
+  const engine = fs.readFileSync(path.join(dist, "content", "engine.js"));
+  zipEntry(entries, "dist/content/engine.js", engine);
 
   // ── zip writer ──
   const chunks = [];

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PRISM",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "PRISM — a full-fledged YouTube experience extension: discovery feeds, credibility layer, theme engine, session history, SponsorBlock, playback controls and more. Signed by Mozilla, distributed via GitHub releases, never listed on AMO.",
   "homepage_url": "https://github.com/mheci/PRISM",
   "browser_specific_settings": {
@@ -44,7 +44,7 @@
         "https://music.youtube.com/*"
       ],
       "js": [
-        "content/boot.js"
+        "dist/content/engine.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
